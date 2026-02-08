@@ -2,50 +2,9 @@ const { Plugin, Notice, PluginSettingTab, Setting, MarkdownView } = require('obs
 
 const { pipeline, env } = require('@xenova/transformers');
 
-try {
-  // Method 1: Direct env.backends approach (transformers.js 2.x)
-  if (typeof env.backends !== 'undefined') {
-    env.backends.onnx = env.backends.onnx || {};
-    env.backends.onnx.wasm = env.backends.onnx.wasm || {};
-    env.backends.onnx.wasm.numThreads = 1;
-    env.backends.onnx.wasm.proxy = false;
-    log('Configured env.backends.onnx.wasm');
-  }
-
-  // Method 2: Direct env.onnx approach (fallback)
-  env.onnx = env.onnx || {};
-  env.onnx.wasm = env.onnx.wasm || {};
-  env.onnx.wasm.numThreads = 1;
-  env.onnx.wasm.proxy = false;
-  log('Configured env.onnx.wasm');
-
-  // Method 3: Try to access onnxruntime-web directly
-  const ort = require('onnxruntime-web');
-  if (ort && ort.env) {
-    ort.env.wasm.numThreads = 1;
-    ort.env.wasm.proxy = false;
-    log('Configured onnxruntime-web directly');
-  }
-} catch (e) {
-  log('ONNX config note', e.message);
-}
-
 // Configure transformers.js to use browser cache and allow local files
 env.useBrowserCache = true;
 env.allowLocalModels = false;
-
-/*
-if (env.backends?.onnx?.wasm) {
-  env.backends.onnx.wasm.numThreads = 1;
-  env.backends.onnx.wasm.proxy = false;
-} else {
-  // Older transformers.js versions
-  env.onnx = env.onnx || {};
-  env.onnx.wasm = env.onnx.wasm || {};
-  env.onnx.wasm.numThreads = 1;
-  env.onnx.wasm.proxy = false;
-}
-*/
 
 function log(message, data) {
   const timestamp = new Date().toISOString().substr(11, 12);
@@ -87,7 +46,7 @@ async function isModelCached(modelId) {
 
 class WhisperTranscriptionPlugin extends Plugin {
   settings = {
-    modelId: 'Xenova/whisper-tiny.en',
+    modelId: 'Xenova/whisper-base.en',
     chunkDurationMs: 10000,
   };
 
@@ -101,21 +60,22 @@ class WhisperTranscriptionPlugin extends Plugin {
   processingCount = 0;
   chunkNumber = 0;
   lastStatus = 0;
+  isStopping = false;
 
   async onload() {
     log('Plugin loading');
+    if (this.app.isMobile === false) {
+      log('Desktop detected - plugin disabled');
+      new Notice('Plugin only works on mobile devices');
+      return;
+    }
     await this.loadSettings();
 
     this.addCommand({
       id: 'toggle-transcription',
       name: 'Toggle Voice Transcription',
       callback: () => this.toggleRecording(),
-    });
-
-    this.addCommand({
-      id: 'stop-transcription',
-      name: 'Stop Voice Transcription',
-      callback: () => this.stopRecording(),
+      icon: 'mic',
     });
 
     this.addSettingTab(new WhisperSettingTab(this.app, this));
@@ -316,9 +276,19 @@ class WhisperTranscriptionPlugin extends Plugin {
         log(`Chunk #${chunkNum} NO AUDIO DATA`);
       }
 
-      if (this.isRecording && this.mediaStream) {
+      if (this.isStopping) {
+        this.isStopping = false;
+        if (this.mediaStream) {
+          this.mediaStream.getTracks().forEach((track) => track.stop());
+          this.mediaStream = null;
+        }
+        // this.targetEditor = null;
+        new Notice('Recording stopped');
+        log('Recording stopped');
+      } else if (this.isRecording && this.mediaStream) {
         this.recordChunk();
       }
+
     };
 
     recorder.onerror = (event) => {
@@ -342,15 +312,9 @@ class WhisperTranscriptionPlugin extends Plugin {
     const ratio = fromSampleRate / toSampleRate;
     const newLength = Math.round(audioData.length / ratio);
     const result = new Float32Array(newLength);
-
     for (let i = 0; i < newLength; i++) {
-      const srcIndex = i * ratio;
-      const srcIndexFloor = Math.floor(srcIndex);
-      const srcIndexCeil = Math.min(srcIndexFloor + 1, audioData.length - 1);
-      const t = srcIndex - srcIndexFloor;
-      result[i] = audioData[srcIndexFloor] * (1 - t) + audioData[srcIndexCeil] * t;
+      result[i] = audioData[Math.floor(i * ratio)];
     }
-
     return result;
   }
 
@@ -452,6 +416,7 @@ class WhisperTranscriptionPlugin extends Plugin {
     }
 
     this.isRecording = false;
+    this.isStopping = true;
 
     if (this.currentRecorder && this.currentRecorder.state === 'recording') {
       log('Stopping current recorder');
@@ -459,15 +424,7 @@ class WhisperTranscriptionPlugin extends Plugin {
     }
     this.currentRecorder = null;
 
-    if (this.mediaStream) {
-      log('Stopping media stream tracks');
-      this.mediaStream.getTracks().forEach((track) => track.stop());
-      this.mediaStream = null;
-    }
-
-    this.targetEditor = null;
-    new Notice('Recording stopped');
-    log('Recording stopped completely');
+    new Notice('Recording stopping');
   }
 
   onunload() {
@@ -494,10 +451,10 @@ class WhisperSettingTab extends PluginSettingTab {
       .setDesc('Smaller = faster, less accurate. Downloaded on first use.')
       .addDropdown((dropdown) =>
         dropdown
-          .addOption('Xenova/whisper-tiny.en', 'Tiny (40MB) - Fastest')
-          .addOption('Xenova/whisper-base.en', 'Base (70MB) - Balanced')
-          .addOption('Xenova/whisper-small.en', 'Small (170MB) - Best quality')
-          .addOption('distil-whisper/distil-small.en', 'Distil Small - Fast and good')
+          .addOption('Xenova/whisper-tiny.en', 'Tiny (40MB)')
+          .addOption('Xenova/whisper-base.en', 'Base (70MB)')
+          .addOption('Xenova/whisper-small.en', 'Small (170MB)')
+          .addOption('distil-whisper/distil-small.en', 'Distil Small')
           .setValue(this.plugin.settings.modelId)
           .onChange(async (value) => {
             this.plugin.settings.modelId = value;

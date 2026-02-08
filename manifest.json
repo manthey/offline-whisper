@@ -1,9 +1,9 @@
 {
-  "id": "whisper-transcription",
-  "name": "Whisper Transcription",
+  "id": "offline-whisper",
+  "name": "Offline Whisper Transcription",
   "version": "1.0.0",
   "minAppVersion": "1.0.0",
-  "description": "Offline speech-to-text using Whisper via Transformers.js",
+  "description": "Offline speech-to-text using Whisper",
   "author": "David Manthey",
   "isDesktopOnly": false
 }
