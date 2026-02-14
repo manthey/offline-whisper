@@ -1,10 +1,20 @@
 const { Plugin, Notice, PluginSettingTab, Setting, MarkdownView } = require('obsidian');
 
-const { pipeline, env } = require('@xenova/transformers');
+let pipeline, env, DesktopTranscriber;
 
-// Configure transformers.js to use browser cache and allow local files
-env.useBrowserCache = true;
-env.allowLocalModels = false;
+// Conditional imports based on platform
+const isMobilePlatform = typeof process === 'undefined' || !process.versions || !process.versions.electron;
+
+if (isMobilePlatform) {
+  const transformers = require('@xenova/transformers');
+  pipeline = transformers.pipeline;
+  env = transformers.env;
+  env.useBrowserCache = true;
+  env.allowLocalModels = false;
+} else {
+  const desktopModule = require('./desktop-transcriber.js');
+  DesktopTranscriber = desktopModule.DesktopTranscriber;
+}
 
 function log(message, data) {
   const timestamp = new Date().toISOString().substr(11, 12);
@@ -51,6 +61,7 @@ class WhisperTranscriptionPlugin extends Plugin {
   };
 
   transcriber = null;
+  desktopTranscriber = null;
   isRecording = false;
   isModelLoading = false;
   mediaStream = null;
@@ -64,11 +75,6 @@ class WhisperTranscriptionPlugin extends Plugin {
 
   async onload() {
     log('Plugin loading');
-    if (this.app.isMobile === false) {
-      log('Desktop detected - plugin disabled');
-      new Notice('Plugin only works on mobile devices');
-      return;
-    }
     await this.loadSettings();
 
     this.addCommand({
@@ -120,6 +126,22 @@ class WhisperTranscriptionPlugin extends Plugin {
     this.isModelLoading = true;
 
     try {
+      // Desktop path: use whisper.cpp
+      if (!isMobilePlatform) {
+        this.desktopTranscriber = new DesktopTranscriber(this);
+        await this.desktopTranscriber.initialize(this.settings.modelId, (progress) => {
+          if (progress.message) {
+            this.showStatus(progress.message, true);
+          }
+        });
+        this.transcriber = (audioData) => this.desktopTranscriber.transcribe(audioData);
+        this.isModelLoading = false;
+        log('Desktop transcriber ready');
+        this.showStatus('Model ready', 2000);
+        return true;
+      }
+
+      // Mobile path: use transformers.js
       const cached = await isModelCached(this.settings.modelId);
 
       if (cached) {
@@ -451,9 +473,10 @@ class WhisperSettingTab extends PluginSettingTab {
       .setDesc('Smaller = faster, less accurate. Downloaded on first use.')
       .addDropdown((dropdown) =>
         dropdown
-          .addOption('Xenova/whisper-tiny.en', 'Tiny (40MB)')
-          .addOption('Xenova/whisper-base.en', 'Base (70MB)')
-          .addOption('Xenova/whisper-small.en', 'Small (170MB)')
+          .addOption('Xenova/whisper-tiny.en', 'Tiny')
+          .addOption('Xenova/whisper-base.en', 'Base (between Tiny and Small)')
+          .addOption('Xenova/whisper-small.en', 'Small')
+          .addOption('Xenova/whisper-medium.en', 'Medium')
           .addOption('distil-whisper/distil-small.en', 'Distil Small')
           .setValue(this.plugin.settings.modelId)
           .onChange(async (value) => {
@@ -485,7 +508,15 @@ class WhisperSettingTab extends PluginSettingTab {
         button
           .setButtonText('Check')
           .onClick(async () => {
-            const cached = await isModelCached(this.plugin.settings.modelId);
+            let cached;
+            if (!isMobilePlatform && this.plugin.desktopTranscriber) {
+              cached = this.plugin.desktopTranscriber.isModelCached(this.plugin.settings.modelId);
+            } else if (!isMobilePlatform) {
+              const tempTranscriber = new DesktopTranscriber(this.plugin);
+              cached = tempTranscriber.isModelCached(this.plugin.settings.modelId);
+            } else {
+              cached = await isModelCached(this.plugin.settings.modelId);
+            }
             new Notice(cached ? 'Model is cached - offline ready' : 'Model not cached - needs download');
           })
       );
