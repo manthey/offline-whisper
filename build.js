@@ -11,7 +11,7 @@ esbuild.build({
   minify: false,
   sourcemap: false,
 }).then(() => {
-  console.log('Build complete');
+  console.log(`Build complete`);
 }).catch((err) => {
   console.error(err);
   process.exit(1);
