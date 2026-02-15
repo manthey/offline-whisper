@@ -83,7 +83,9 @@ class WhisperTranscriptionPlugin extends Plugin {
       callback: () => this.toggleRecording(),
       icon: 'mic',
     });
-
+    this.addRibbonIcon('mic', 'Toggle Voice Transcription', (evt) => {
+      this.toggleRecording();
+    });
     this.addSettingTab(new WhisperSettingTab(this.app, this));
     log('Plugin loaded');
   }
