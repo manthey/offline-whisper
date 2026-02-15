@@ -42,6 +42,7 @@ function getPlatformInfo() {
     execNames = ['whisper-cli.exe'];
     archivePattern = 'whisper-blas-bin-x64.zip';
   } else if (platform === 'darwin') {
+    const archSuffix = arch === 'arm64' ? 'arm64' : 'x64';
     archivePattern = `whisper-bin-${archSuffix}-apple-darwin.zip`;
   } else if (platform === 'linux') {
     archivePattern = 'whisper-bin-x86_64-linux-gnu.zip';
