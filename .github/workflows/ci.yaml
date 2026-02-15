@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:
@@ -25,6 +27,14 @@ jobs:
         run: npm ci
       - name: Build
         run: npm run build
+      - name: Delete existing latest release
+        if: github.ref_name == 'master'
+        run: |
+          if gh release view latest >/dev/null 2>&1; then
+            gh release delete latest --yes
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Update latest release
         if: github.ref_name == 'master'
         uses: softprops/action-gh-release@v2
@@ -32,7 +42,7 @@ jobs:
           GITHUB_ACTION_GH_RELEASE_QUIET: "true"
         with:
           tag_name: latest
-          name: Latest (master)
+          name: Latest
           files: |
             main.js
             manifest.json
