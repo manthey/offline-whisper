@@ -488,7 +488,20 @@ class WhisperSettingTab extends PluginSettingTab {
             this.plugin.settings.modelId = value;
             this.plugin.transcriber = null;
             await this.plugin.saveSettings();
-            new Notice('Model changed. New model loads on next recording.');
+            let cached;
+            if (!isMobilePlatform && this.plugin.desktopTranscriber) {
+              cached = this.plugin.desktopTranscriber.isModelCached(this.plugin.settings.modelId);
+            } else if (!isMobilePlatform) {
+              const tempTranscriber = new DesktopTranscriber(this.plugin);
+              cached = tempTranscriber.isModelCached(this.plugin.settings.modelId);
+            } else {
+              cached = await isModelCached(this.plugin.settings.modelId);
+            }
+            if (!cached) {
+              new Notice('Model changed. New model loads on next recording.');
+            } else {
+              new Notice('Model changed (already cached).');
+            }
           })
       );
 
