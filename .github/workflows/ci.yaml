@@ -1,19 +1,62 @@
-name: Release Obsidian Plugin
+name: Test Obsidian Plugin
 
 on:
   push:
-    branches:
-      - master
-    tags:
-      - "*"
+  pull_request:
 
 permissions:
   contents: write
   id-token: write
 
 jobs:
+  test-desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run desktop test
+        run: node tests/test_desktop.js
+        env:
+          EXPECTED_PHRASE: this is a test
+
+  # test-mobile:
+  #   runs-on: ubuntu-latest
+  #   timeout-minutes: 30
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Use Node.js
+  #       uses: actions/setup-node@v4
+  #       with:
+  #         node-version: '20'
+  #         cache: npm
+  #     - name: Install dependencies
+  #       run: npm ci
+  #     - name: Install Playwright
+  #       run: npx playwright install chromium --with-deps
+  #     - name: Run mobile test
+  #       run: node tests/test_mobile.js
+  #       env:
+  #         EXPECTED_PHRASE: this is a test
+
   build:
+    needs:
+      - test-desktop
+      # - test-mobile
     runs-on: ubuntu-latest
+    # if: always() && (needs.test-desktop.result == 'success' && needs.test-mobile.result == 'success')
+    if: always() && (needs.test-desktop.result == 'success')
+    # && needs.test-mobile.result == 'success')
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,8 +86,7 @@ jobs:
         with:
           tag_name: latest
           name: Latest
-          body:
-            Master branch
+          body: Master branch
           files: |
             main.js
             manifest.json
@@ -62,7 +104,7 @@ jobs:
           git add package.json
           git commit --amend --no-edit
           git tag -f $TAG
-      - name: Create proper GitHub Release (for future community submission)
+      - name: Create proper GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
