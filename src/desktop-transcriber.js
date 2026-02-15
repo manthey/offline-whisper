@@ -5,6 +5,10 @@ const MODEL_MAP = {
   'Xenova/whisper-base.en': 'ggml-base.en.bin',
   'Xenova/whisper-small.en': 'ggml-small.en.bin',
   'Xenova/whisper-medium.en': 'ggml-medium.en.bin',
+  'Xenova/whisper-tiny': 'ggml-tiny.bin',
+  'Xenova/whisper-base': 'ggml-base.bin',
+  'Xenova/whisper-small': 'ggml-small.bin',
+  'Xenova/whisper-medium': 'ggml-medium.bin',
 };
 
 const nodeRequire = new Function('moduleName', 'return require(moduleName)');

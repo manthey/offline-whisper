@@ -475,10 +475,14 @@ class WhisperSettingTab extends PluginSettingTab {
       .setDesc('Smaller = faster, less accurate. Downloaded on first use.')
       .addDropdown((dropdown) =>
         dropdown
-          .addOption('Xenova/whisper-tiny.en', 'Tiny EN')
-          .addOption('Xenova/whisper-base.en', 'Base EN (between Tiny and Small)')
-          .addOption('Xenova/whisper-small.en', 'Small EN')
-          .addOption('Xenova/whisper-medium.en', 'Medium EN')
+          .addOption('Xenova/whisper-tiny.en', 'Tiny English')
+          .addOption('Xenova/whisper-base.en', 'Base English')
+          .addOption('Xenova/whisper-small.en', 'Small English')
+          .addOption('Xenova/whisper-medium.en', 'Medium English')
+          .addOption('Xenova/whisper-tiny', 'Tiny')
+          .addOption('Xenova/whisper-base', 'Base')
+          .addOption('Xenova/whisper-small', 'Small')
+          .addOption('Xenova/whisper-medium', 'Medium')
           .setValue(this.plugin.settings.modelId)
           .onChange(async (value) => {
             this.plugin.settings.modelId = value;
