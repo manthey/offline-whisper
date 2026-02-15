@@ -119,7 +119,7 @@ class WhisperTranscriptionPlugin extends Plugin {
     }
     if (this.isModelLoading) {
       log('Model is currently loading, skipping');
-      this.showStatus('Model is already loading, please wait...', 3000);
+      this.showStatus('Model is already loading', 3000);
       return false;
     }
 
@@ -145,7 +145,7 @@ class WhisperTranscriptionPlugin extends Plugin {
       const cached = await isModelCached(this.settings.modelId);
 
       if (cached) {
-        this.showStatus('Loading model from cache...', true);
+        this.showStatus('Loading model from cache', true);
         log('Loading model from cache (offline)');
       } else {
         this.showStatus(`Downloading model: ${this.settings.modelId}. This only happens once.`, true);
@@ -165,7 +165,7 @@ class WhisperTranscriptionPlugin extends Plugin {
                 this.showStatus(`Downloading: ${pct}% (${mb}MB)`, true);
               }
             } else if (progress.status === 'loading') {
-              this.showStatus('Initializing model...', true);
+              this.showStatus('Initializing model', true);
             } else if (progress.status === 'ready') {
               log('Model ready status received', true);
             }
@@ -220,7 +220,7 @@ class WhisperTranscriptionPlugin extends Plugin {
     }
 
     try {
-      log('Requesting microphone access...');
+      log('Requesting microphone access');
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -354,7 +354,7 @@ class WhisperTranscriptionPlugin extends Plugin {
     log(`Chunk #${chunkNum} starting transcription, queue size: ${this.processingCount}`);
 
     if (this.processingCount === 1 && this.isRecording) {
-      this.showStatus('Processing speech...');
+      this.showStatus('Processing speech');
     }
 
     try {
@@ -362,7 +362,7 @@ class WhisperTranscriptionPlugin extends Plugin {
       const arrayBuffer = await audioBlob.arrayBuffer();
       log(`Chunk #${chunkNum} arrayBuffer size: ${arrayBuffer.byteLength}`);
 
-      log(`Chunk #${chunkNum} decoding audio...`);
+      log(`Chunk #${chunkNum} decoding audio`);
       const audioContext = new (window.AudioContext || window.webkitAudioContext)();
       const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
       log(`Chunk #${chunkNum} decoded`, {
@@ -387,7 +387,7 @@ class WhisperTranscriptionPlugin extends Plugin {
 
       log(`Chunk #${chunkNum} audio ready: ${audioData.length} samples (${(audioData.length / 16000).toFixed(2)}s)`);
 
-      log(`Chunk #${chunkNum} calling transcriber...`);
+      log(`Chunk #${chunkNum} calling transcriber`);
       const startTime = Date.now();
 
       const result = await this.transcriber(audioData);
@@ -425,7 +425,7 @@ class WhisperTranscriptionPlugin extends Plugin {
       this.processingCount--;
       log(`Chunk #${chunkNum} done, remaining in queue: ${this.processingCount}`);
       if (this.processingCount === 0 && this.isRecording) {
-        this.showStatus('Listening...', 2000);
+        this.showStatus('Listening', 2000);
       }
     }
   }
@@ -517,6 +517,38 @@ class WhisperSettingTab extends PluginSettingTab {
               cached = await isModelCached(this.plugin.settings.modelId);
             }
             new Notice(cached ? 'Model is cached - offline ready' : 'Model not cached - needs download');
+          })
+      );
+    new Setting(containerEl)
+      .setName('Clear Caches')
+      .setDesc('Delete all cached models and binaries')
+      .addButton((button) =>
+        button
+          .setButtonText('Clear Cache')
+          .setWarning()
+          .onClick(async () => {
+            button.setDisabled(true);
+            try {
+              if (!isMobilePlatform) {
+                if (!this.plugin.destopTransriber) {
+                  this.plugin.desktopTranscriber = new DesktopTranscriber(this.plugin);
+                }
+                this.plugin.desktopTranscriber.clearCache();
+                new Notice('Cache cleared');
+              } else {
+                const cacheNames = await caches.keys();
+                for (const name of cacheNames) {
+                  if (name.includes('transformers') || name.includes('xenova')) {
+                    await caches.delete(name);
+                  }
+                }
+                new Notice('Cache cleared');
+              }
+            } catch (err) {
+              new Notice('Failed to clear cache: ' + err.message);
+            } finally {
+              button.setDisabled(false);
+            }
           })
       );
   }

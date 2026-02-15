@@ -43,6 +43,8 @@ jobs:
         with:
           tag_name: latest
           name: Latest
+          body:
+            Master branch
           files: |
             main.js
             manifest.json

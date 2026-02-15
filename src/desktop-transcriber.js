@@ -174,13 +174,21 @@ async function getLatestReleaseUrl(archivePattern) {
   const { https } = getNodeModules();
   log('Fetching latest whisper.cpp release info');
   const response = await new Promise((resolve, reject) => {
-    https.get('https://api.github.com/repos/ggerganov/whisper.cpp/releases/latest', {
-      headers: { 'User-Agent': 'ObsidianWhisperPlugin' }
-    }, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => resolve({ status: res.statusCode, data }));
-    }).on('error', reject);
+    let url = 'https://api.github.com/repos/ggerganov/whisper.cpp/releases/latest';
+    const makeRequest = (requestUrl) => {
+      https.get(requestUrl, {
+        headers: { 'User-Agent': 'ObsidianWhisperPlugin' },
+      }, (res) => {
+          if (res.statusCode === 302 || res.statusCode === 301) {
+            makeRequest(res.headers.location);
+            return;
+          }
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => resolve({ status: res.statusCode, data }));
+      }).on('error', reject);
+    };
+    makeRequest(url);
   });
 
   if (response.status !== 200) {
@@ -280,7 +288,7 @@ class DesktopTranscriber {
 
     if (!this.whisperPath) {
       log('Downloading whisper executable');
-      progressCallback({ status: 'downloading', message: 'Downloading whisper executable...' });
+      progressCallback({ status: 'downloading', message: 'Downloading whisper executable' });
       await this.downloadExecutable(binDir, platformInfo, progressCallback);
       this.whisperPath = findExecutable(binDir, platformInfo.execNames);
       if (!this.whisperPath) {
@@ -321,7 +329,7 @@ class DesktopTranscriber {
     });
 
     log('Extracting archive');
-    progressCallback({ status: 'extracting', message: 'Extracting...' });
+    progressCallback({ status: 'extracting', message: 'Extracting' });
     await extractZip(zipPath, binDir, platformInfo.platform);
 
     try {
@@ -412,6 +420,19 @@ class DesktopTranscriber {
     const modelFileName = MODEL_MAP[modelId] || 'ggml-base.en.bin';
     const modelPath = path.join(modelsDir, modelFileName);
     return fs.existsSync(modelPath);
+  }
+
+  clearCache() {
+    const { path, fs } = this.getNodeModules();
+    const pluginDir = this.getPluginDir();
+    const modelsDir = path.join(pluginDir, 'models');
+    if (fs.existsSync(modelsDir)) {
+      fs.rmSync(modelsDir, { recursive: true, force: true });
+    }
+    const binDir = path.join(pluginDir, 'bin');
+    if (fs.existsSync(binDir)) {
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
   }
 }
 
