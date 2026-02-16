@@ -5,7 +5,7 @@
     "build": "node build.js"
   },
   "devDependencies": {
-    "esbuild": "^0.20.0",
+    "esbuild": "^0.27.3",
     "playwright": "^1.58.2"
   },
   "dependencies": {
