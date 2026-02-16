@@ -4,13 +4,13 @@ Offline speech-to-text using Whisper
 
 ## Overview
 
-This plugin provides speech-to-text transcription for Obsidian using OpenAI's Whisper models. It is designed to function entirely offline after the initial model download. It supports both desktop and mobile environments, utilizing different backends optimized for each platform's architecture.
+This plugin provides speech-to-text transcription for Obsidian using Whisper models. It is designed to function entirely offline after the initial model download. It supports both desktop and mobile environments.
 
 ## Platform Implementation
 
 The plugin uses different underlying engines to ensure performance and compatibility across devices.
 
-On desktop operating systems (Windows, MacOS, Linux), the plugin utilizes `whisper.cpp`.  One first use, the appropriate `whisper.cpp` command-line binary is downloaded for the operation system.
+On desktop operating systems (Windows, MacOS, Linux), the plugin utilizes `whisper.cpp`.  One first use, the appropriate `whisper.cpp` command-line binary is downloaded for the operating system.
 
 On mobile operating systems (Android, iOS), the plugin utilizes a bundled version of transformers.js that runs via WebAssembly.
 
