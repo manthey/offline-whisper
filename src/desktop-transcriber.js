@@ -35,20 +35,23 @@ function getPlatformInfo() {
   const platform = process.platform;
   const arch = process.arch;
 
-  let execNames = ['whisper-cli'];
+  let execNames = ['whisper-cli', 'main'];
   let archivePattern = '';
+  let repo = '';
 
   if (platform === 'win32') {
     execNames = ['whisper-cli.exe'];
     archivePattern = 'whisper-blas-bin-x64.zip';
+    repo = 'https://api.github.com/repos/ggerganov/whisper.cpp/releases/latest';
   } else if (platform === 'darwin') {
-    const archSuffix = arch === 'arm64' ? 'arm64' : 'x64';
-    archivePattern = `whisper-bin-${archSuffix}-apple-darwin.zip`;
+    repo = 'https://api.github.com/repos/bizenlabs/whisper-cpp-macos-bin/releases/latest';
+    archivePattern = arch === 'arm64' ? 'whisper-cpp-v1.8.2-macos-arm64-metal.zip' : 'whisper-cpp-v1.8.2-macos-arm64-metal.zip';
   } else if (platform === 'linux') {
-    archivePattern = 'whisper-bin-x86_64-linux-gnu.zip';
+    archivePattern = 'whisper-bin-blas-linux-x64.tar.gz';
+    repo = 'https://api.github.com/repos/dscripka/whisper.cpp_binaries/releases/latest';
   }
 
-  return { platform, arch, execNames, archivePattern };
+  return { platform, arch, execNames, archivePattern, repo };
 }
 
 function downloadFile(url, destPath, progressCallback) {
@@ -105,8 +108,10 @@ async function extractZip(zipPath, destDir, platform) {
         '-Command',
         `Expand-Archive -Path "${zipPath}" -DestinationPath "${destDir}" -Force`
       ]);
-    } else {
+    } else if (zipPath.endsWith('.zip')) {
       proc = spawn('unzip', ['-o', zipPath, '-d', destDir]);
+    } else {
+      proc = spawn('tar', ['-xzf', zipPath, '-C', destDir]);
     }
     proc.stdout.on('data', (data) => {
       stdout += data.toString();
@@ -175,11 +180,10 @@ function listDirRecursive(dir, prefix = '') {
   return results;
 }
 
-async function getLatestReleaseUrl(archivePattern) {
+async function getLatestReleaseUrl(archivePattern, repo) {
   const { https } = getNodeModules();
   log('Fetching latest whisper.cpp release info');
   const response = await new Promise((resolve, reject) => {
-    let url = 'https://api.github.com/repos/ggerganov/whisper.cpp/releases/latest';
     const makeRequest = (requestUrl) => {
       https.get(requestUrl, {
         headers: { 'User-Agent': 'ObsidianWhisperPlugin' },
@@ -193,7 +197,7 @@ async function getLatestReleaseUrl(archivePattern) {
         res.on('end', () => resolve({ status: res.statusCode, data }));
       }).on('error', reject);
     };
-    makeRequest(url);
+    makeRequest(repo);
   });
 
   if (response.status !== 200) {
@@ -322,8 +326,8 @@ class DesktopTranscriber {
 
   async downloadExecutable(binDir, platformInfo, progressCallback) {
     const { path, fs } = this.getNodeModules();
-    const url = await getLatestReleaseUrl(platformInfo.archivePattern);
-    const zipPath = path.join(binDir, 'whisper.zip');
+    const url = await getLatestReleaseUrl(platformInfo.archivePattern, platformInfo.repo);
+    const zipPath = path.join(binDir, platformInfo.platform !== 'linux' ? 'whisper.zip' : 'whisper.tar.gz');
 
     log('Downloading from: ' + url);
 
