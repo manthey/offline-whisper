@@ -58,38 +58,40 @@ function downloadFile(url, destPath, progressCallback) {
   const { https, fs } = getNodeModules();
   return new Promise((resolve, reject) => {
     const makeRequest = (requestUrl) => {
-      https.get(requestUrl, { headers: { 'User-Agent': 'ObsidianWhisperPlugin' } }, (response) => {
-        if (response.statusCode === 302 || response.statusCode === 301) {
-          makeRequest(response.headers.location);
-          return;
-        }
-
-        if (response.statusCode !== 200) {
-          reject(new Error(`HTTP ${response.statusCode}`));
-          return;
-        }
-
-        const totalSize = parseInt(response.headers['content-length'], 10);
-        let downloadedSize = 0;
-
-        const file = fs.createWriteStream(destPath);
-        response.on('data', (chunk) => {
-          downloadedSize += chunk.length;
-          if (progressCallback && totalSize) {
-            progressCallback(downloadedSize, totalSize);
+      https
+        .get(requestUrl, { headers: { 'User-Agent': 'ObsidianWhisperPlugin' } }, (response) => {
+          if (response.statusCode === 302 || response.statusCode === 301) {
+            makeRequest(response.headers.location);
+            return;
           }
-        });
 
-        response.pipe(file);
-        file.on('finish', () => {
-          file.close();
-          resolve();
-        });
-        file.on('error', (err) => {
-          fs.unlink(destPath, () => {});
-          reject(err);
-        });
-      }).on('error', reject);
+          if (response.statusCode !== 200) {
+            reject(new Error(`HTTP ${response.statusCode}`));
+            return;
+          }
+
+          const totalSize = parseInt(response.headers['content-length'], 10);
+          let downloadedSize = 0;
+
+          const file = fs.createWriteStream(destPath);
+          response.on('data', (chunk) => {
+            downloadedSize += chunk.length;
+            if (progressCallback && totalSize) {
+              progressCallback(downloadedSize, totalSize);
+            }
+          });
+
+          response.pipe(file);
+          file.on('finish', () => {
+            file.close();
+            resolve();
+          });
+          file.on('error', (err) => {
+            fs.unlink(destPath, () => {});
+            reject(err);
+          });
+        })
+        .on('error', reject);
     };
 
     makeRequest(url);
@@ -103,11 +105,7 @@ async function extractZip(zipPath, destDir, platform) {
     let stdout = '';
 
     if (platform === 'win32') {
-      proc = spawn('powershell', [
-        '-NoProfile',
-        '-Command',
-        `Expand-Archive -Path "${zipPath}" -DestinationPath "${destDir}" -Force`
-      ]);
+      proc = spawn('powershell', ['-NoProfile', '-Command', `Expand-Archive -Path "${zipPath}" -DestinationPath "${destDir}" -Force`]);
     } else if (zipPath.endsWith('.zip')) {
       proc = spawn('unzip', ['-o', zipPath, '-d', destDir]);
     } else {
@@ -185,17 +183,23 @@ async function getLatestReleaseUrl(archivePattern, repo) {
   log('Fetching latest whisper.cpp release info');
   const response = await new Promise((resolve, reject) => {
     const makeRequest = (requestUrl) => {
-      https.get(requestUrl, {
-        headers: { 'User-Agent': 'ObsidianWhisperPlugin' },
-      }, (res) => {
-          if (res.statusCode === 302 || res.statusCode === 301) {
-            makeRequest(res.headers.location);
-            return;
+      https
+        .get(
+          requestUrl,
+          {
+            headers: { 'User-Agent': 'ObsidianWhisperPlugin' },
+          },
+          (res) => {
+            if (res.statusCode === 302 || res.statusCode === 301) {
+              makeRequest(res.headers.location);
+              return;
+            }
+            let data = '';
+            res.on('data', (chunk) => (data += chunk));
+            res.on('end', () => resolve({ status: res.statusCode, data }));
           }
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => resolve({ status: res.statusCode, data }));
-      }).on('error', reject);
+        )
+        .on('error', reject);
     };
     makeRequest(repo);
   });
@@ -207,10 +211,10 @@ async function getLatestReleaseUrl(archivePattern, repo) {
   const releaseInfo = JSON.parse(response.data);
   log('Latest release: ' + releaseInfo.tag_name);
 
-  const asset = releaseInfo.assets.find(a => a.name === archivePattern);
+  const asset = releaseInfo.assets.find((a) => a.name === archivePattern);
 
   if (!asset) {
-    const availableAssets = releaseInfo.assets.map(a => a.name).join(', ');
+    const availableAssets = releaseInfo.assets.map((a) => a.name).join(', ');
     throw new Error(`Could not find ${archivePattern} in release. Available: ${availableAssets}`);
   }
 
@@ -221,8 +225,8 @@ function writeWavFile(filePath, audioData, sampleRate) {
   const { fs } = getNodeModules();
   const numChannels = 1;
   const bitsPerSample = 16;
-  const byteRate = sampleRate * numChannels * bitsPerSample / 8;
-  const blockAlign = numChannels * bitsPerSample / 8;
+  const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
+  const blockAlign = (numChannels * bitsPerSample) / 8;
   const dataSize = audioData.length * 2;
   const headerSize = 44;
   const fileSize = headerSize + dataSize - 8;
@@ -277,7 +281,7 @@ class DesktopTranscriber {
   }
 
   async ensureDir(dir) {
-  const { fs } = this.getNodeModules();
+    const { fs } = this.getNodeModules();
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
@@ -374,12 +378,7 @@ class DesktopTranscriber {
     log('Wrote temp WAV: ' + tempWavPath);
 
     return new Promise((resolve, reject) => {
-      const args = [
-        '-m', this.modelPath,
-        '-f', tempWavPath,
-        '-nt',
-        '-np',
-      ];
+      const args = ['-m', this.modelPath, '-f', tempWavPath, '-nt', '-np'];
 
       log('Spawning whisper: ' + this.whisperPath + ' ' + args.join(' '));
       const proc = spawn(this.whisperPath, args);

@@ -206,7 +206,7 @@ class WhisperTranscriptionPlugin extends Plugin {
       log('Already recording, ignoring start');
       return;
     }
-	setIcon(this.ribbonIcon, 'mic'); 
+	setIcon(this.ribbonIcon, 'mic');
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view) {
       log('No active markdown view');
@@ -434,7 +434,7 @@ class WhisperTranscriptionPlugin extends Plugin {
 
   stopRecording() {
     log('Stopping recording');
-	setIcon(this.ribbonIcon, 'mic-off'); 
+	setIcon(this.ribbonIcon, 'mic-off');
     if (!this.isRecording) {
       log('Was not recording');
       return;

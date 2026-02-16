@@ -130,11 +130,7 @@ async function runMobileTest() {
     const normalizedExpected = expectedPhrase.toLowerCase();
 
     if (!normalizedResult.includes(normalizedExpected)) {
-      throw new Error(
-        'Transcription verification failed.\n' +
-        '  Expected phrase: "' + expectedPhrase + '"\n' +
-        '  Actual result: "' + result.text + '"'
-      );
+      throw new Error('Transcription verification failed.\n' + '  Expected phrase: "' + expectedPhrase + '"\n' + '  Actual result: "' + result.text + '"');
     }
 
     console.log('Mobile test passed.');

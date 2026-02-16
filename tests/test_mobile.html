@@ -1,25 +1,22 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
-<head>
-  <meta charset="utf-8">
-  <title>Whisper Mobile Test</title>
-  <script type="module">
-    import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2';
+  <head>
+    <meta charset="utf-8" />
+    <title>Whisper Mobile Test</title>
+    <script type="module">
+      import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2';
 
-    env.useBrowserCache = true;
-    env.allowLocalModels = false;
+      env.useBrowserCache = true;
+      env.allowLocalModels = false;
 
-    window.transformersReady = false;
-    window.transcriber = null;
+      window.transformersReady = false;
+      window.transcriber = null;
 
-    async function initializeTranscriber() {
-      console.log('Initializing transformers.js pipeline');
-      const startTime = Date.now();
+      async function initializeTranscriber() {
+        console.log('Initializing transformers.js pipeline');
+        const startTime = Date.now();
 
-      window.transcriber = await pipeline(
-        'automatic-speech-recognition',
-        'Xenova/whisper-tiny.en',
-        {
+        window.transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny.en', {
           quantized: true,
           progress_callback: (progress) => {
             if (progress.status === 'downloading' && progress.total) {
@@ -28,39 +25,38 @@
             } else if (progress.status === 'ready') {
               console.log('Model ready');
             }
-          }
-        }
-      );
+          },
+        });
 
-      const duration = Date.now() - startTime;
-      console.log('Pipeline initialized in ' + duration + 'ms');
-      window.transformersReady = true;
-    }
-
-    window.runTranscription = async function(audioData) {
-      if (!window.transcriber) {
-        throw new Error('Transcriber not initialized');
+        const duration = Date.now() - startTime;
+        console.log('Pipeline initialized in ' + duration + 'ms');
+        window.transformersReady = true;
       }
 
-      console.log('Running transcription on ' + audioData.length + ' samples');
-      const startTime = Date.now();
+      window.runTranscription = async function (audioData) {
+        if (!window.transcriber) {
+          throw new Error('Transcriber not initialized');
+        }
 
-      const result = await window.transcriber(audioData);
+        console.log('Running transcription on ' + audioData.length + ' samples');
+        const startTime = Date.now();
 
-      const duration = Date.now() - startTime;
-      console.log('Transcription completed in ' + duration + 'ms');
+        const result = await window.transcriber(audioData);
 
-      return result;
-    };
+        const duration = Date.now() - startTime;
+        console.log('Transcription completed in ' + duration + 'ms');
 
-    initializeTranscriber().catch((error) => {
-      console.error('Initialization failed: ' + error.message);
-      window.initError = error.message;
-    });
-  </script>
-</head>
-<body>
-  <h1>Whisper Mobile Test</h1>
-  <p>This page tests the transformers.js transcription pipeline.</p>
-</body>
+        return result;
+      };
+
+      initializeTranscriber().catch((error) => {
+        console.error('Initialization failed: ' + error.message);
+        window.initError = error.message;
+      });
+    </script>
+  </head>
+  <body>
+    <h1>Whisper Mobile Test</h1>
+    <p>This page tests the transformers.js transcription pipeline.</p>
+  </body>
 </html>

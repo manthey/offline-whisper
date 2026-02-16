@@ -80,7 +80,7 @@ jobs:
         if: github.ref_name == 'master'
         uses: softprops/action-gh-release@v2
         env:
-          GITHUB_ACTION_GH_RELEASE_QUIET: "true"
+          GITHUB_ACTION_GH_RELEASE_QUIET: 'true'
         with:
           tag_name: latest
           name: Latest

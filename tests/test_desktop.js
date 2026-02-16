@@ -68,7 +68,10 @@ async function run() {
   const result = await transcriber.transcribe(audioData);
   console.log('Raw result: ' + JSON.stringify(result));
 
-  const transcribedText = (result.text || '').trim().toLowerCase().replace(/[^a-z\s]/g, '');
+  const transcribedText = (result.text || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, '');
   console.log('Transcribed: "' + transcribedText + '"');
   console.log('Expected:    "' + EXPECTED_PHRASE + '"');
 
