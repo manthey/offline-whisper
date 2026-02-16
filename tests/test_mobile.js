@@ -77,8 +77,8 @@ function startServer(htmlPath, port) {
 }
 
 async function runMobileTest() {
-  const htmlPath = path.join(__dirname, 'test-mobile.html');
-  const audioPath = path.join(__dirname, 'test-audio.wav');
+  const htmlPath = path.join(__dirname, 'test_mobile.html');
+  const audioPath = path.join(__dirname, 'test_audio.wav');
 
   if (!fs.existsSync(audioPath)) {
     throw new Error('Test audio file not found: ' + audioPath);

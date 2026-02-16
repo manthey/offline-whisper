@@ -30,33 +30,31 @@ jobs:
         env:
           EXPECTED_PHRASE: this is a test
 
-  # test-mobile:
-  #   runs-on: ubuntu-latest
-  #   timeout-minutes: 30
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - name: Use Node.js
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: '20'
-  #         cache: npm
-  #     - name: Install dependencies
-  #       run: npm ci
-  #     - name: Install Playwright
-  #       run: npx playwright install chromium --with-deps
-  #     - name: Run mobile test
-  #       run: node tests/test_mobile.js
-  #       env:
-  #         EXPECTED_PHRASE: this is a test
+  test-mobile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright
+        run: npx playwright install chromium --with-deps
+      - name: Run mobile test
+        run: node tests/test_mobile.js
+        env:
+          EXPECTED_PHRASE: this is a test
 
   build:
     needs:
       - test-desktop
-      # - test-mobile
+      - test-mobile
     runs-on: ubuntu-latest
-    # if: always() && (needs.test-desktop.result == 'success' && needs.test-mobile.result == 'success')
-    if: always() && (needs.test-desktop.result == 'success')
-    # && needs.test-mobile.result == 'success')
+    if: needs.test-desktop.result == 'success' && needs.test-mobile.result == 'success'
     steps:
       - uses: actions/checkout@v4
         with:
