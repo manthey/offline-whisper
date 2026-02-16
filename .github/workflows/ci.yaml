@@ -29,6 +29,8 @@ jobs:
         run: node tests/test_desktop.js
         env:
           EXPECTED_PHRASE: this is a test
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_OPTIONS: '--require ${{ github.workspace }}/tests/patch_header.js'
 
   test-mobile:
     runs-on: ubuntu-latest
