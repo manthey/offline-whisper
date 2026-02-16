@@ -25,3 +25,20 @@ In any note, select the ribbon icon or the command palette 'Toggle Voice Transcr
 ## Privacy
 
 This plugin processes all audio data locally on your device. No audio recordings or transcriptions are transmitted to external servers at any point.
+
+## Sources
+
+On the desktop, this plugin will install an executable from one of these locations:
+
+- https://github.com/ggerganov/whisper.cpp/releases/latest
+
+- https://github.com/bizenlabs/whisper-cpp-macos-bin/releases/latest
+
+- https://github.com/dscripka/whisper.cpp_binaries/releases/latest
+
+Both the desktop and mobile versions fetch models from huggingface:
+
+- (Desktop) https://huggingface.co/ggerganov/whisper.cpp
+
+- (Mobile) https://huggingface.co/Xenova
+
