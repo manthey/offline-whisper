@@ -1,4 +1,4 @@
-const { Plugin, Notice, PluginSettingTab, Setting, MarkdownView } = require('obsidian');
+const { Plugin, Notice, PluginSettingTab, Setting, MarkdownView, setIcon } = require('obsidian');
 
 let pipeline, env, DesktopTranscriber;
 
@@ -83,7 +83,7 @@ class WhisperTranscriptionPlugin extends Plugin {
       callback: () => this.toggleRecording(),
       icon: 'mic',
     });
-    this.addRibbonIcon('mic', 'Toggle Voice Transcription', (evt) => {
+    this.ribbonIcon = this.addRibbonIcon('mic-off', 'Toggle Voice Transcription', (evt) => {
       this.toggleRecording();
     });
     this.addSettingTab(new WhisperSettingTab(this.app, this));
@@ -206,7 +206,7 @@ class WhisperTranscriptionPlugin extends Plugin {
       log('Already recording, ignoring start');
       return;
     }
-
+	setIcon(this.ribbonIcon, 'mic'); 
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view) {
       log('No active markdown view');
@@ -434,6 +434,7 @@ class WhisperTranscriptionPlugin extends Plugin {
 
   stopRecording() {
     log('Stopping recording');
+	setIcon(this.ribbonIcon, 'mic-off'); 
     if (!this.isRecording) {
       log('Was not recording');
       return;
