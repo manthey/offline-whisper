@@ -67,6 +67,8 @@ class WhisperTranscriptionPlugin extends Plugin {
   chunkNumber = 0;
   lastStatus = 0;
   isStopping = false;
+  nextInsertChunk = 1;
+  pendingResults = new Map();
 
   async onload() {
     log('Plugin loading');
@@ -224,6 +226,8 @@ class WhisperTranscriptionPlugin extends Plugin {
 	  setIcon(this.ribbonIcon, 'mic');
       this.isRecording = true;
       this.chunkNumber = 0;
+      this.nextInsertChunk = 1;
+      this.pendingResults = new Map();
       this.showStatus('Recording started', 2000);
       this.recordChunk();
     } catch (error) {
@@ -366,7 +370,26 @@ class WhisperTranscriptionPlugin extends Plugin {
       log(`Chunk #${chunkNum} transcription complete in ${elapsed}ms`, result);
       const text = result.text ? result.text.trim() : '';
       log(`Chunk #${chunkNum} extracted text: "${text}"`);
-      if (text && text.length > 0 && text !== 'you') {
+      this.pendingResults.set(chunkNum, text);
+      this.flushPendingResults();
+    } catch (error) {
+      log(`Chunk #${chunkNum} transcription FAILED`, error);
+      new Notice('Transcription error: ' + error.message);
+    } finally {
+      this.processingCount--;
+      log(`Chunk #${chunkNum} done, remaining in queue: ${this.processingCount}`);
+      if (this.processingCount === 0 && this.isRecording) {
+        this.showStatus('Listening', 2000);
+      }
+    }
+  }
+
+  flushPendingResults() {
+    while (this.pendingResults.has(this.nextInsertChunk)) {
+      const chunkNum = this.nextInsertChunk;
+      const text = this.pendingResults.get(chunkNum);
+      this.pendingResults.delete(chunkNum);
+      if (text && text.length > 0 && text !== 'you' && text !== '[Blank Audio]') {
         if (this.targetEditor) {
           const cursor = this.targetEditor.getCursor();
           log(`Chunk #${chunkNum} inserting at cursor`, cursor);
@@ -384,15 +407,7 @@ class WhisperTranscriptionPlugin extends Plugin {
       } else {
         log(`Chunk #${chunkNum} empty transcription, nothing to insert`);
       }
-    } catch (error) {
-      log(`Chunk #${chunkNum} transcription FAILED`, error);
-      new Notice('Transcription error: ' + error.message);
-    } finally {
-      this.processingCount--;
-      log(`Chunk #${chunkNum} done, remaining in queue: ${this.processingCount}`);
-      if (this.processingCount === 0 && this.isRecording) {
-        this.showStatus('Listening', 2000);
-      }
+      this.nextInsertChunk++;
     }
   }
 
