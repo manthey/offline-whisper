@@ -34,11 +34,9 @@ function log(message, data) {
 function getPlatformInfo() {
   const platform = process.platform;
   const arch = process.arch;
-
   let execNames = ['whisper-cli', 'main'];
   let archivePattern = '';
   let repo = '';
-
   if (platform === 'win32') {
     execNames = ['whisper-cli.exe'];
     archivePattern = 'whisper-blas-bin-x64.zip';
@@ -50,7 +48,6 @@ function getPlatformInfo() {
     archivePattern = 'whisper-bin-blas-linux-x64.tar.gz';
     repo = 'https://api.github.com/repos/dscripka/whisper.cpp_binaries/releases/latest';
   }
-
   return { platform, arch, execNames, archivePattern, repo };
 }
 
@@ -64,15 +61,12 @@ function downloadFile(url, destPath, progressCallback) {
             makeRequest(response.headers.location);
             return;
           }
-
           if (response.statusCode !== 200) {
             reject(new Error(`HTTP ${response.statusCode}`));
             return;
           }
-
           const totalSize = parseInt(response.headers['content-length'], 10);
           let downloadedSize = 0;
-
           const file = fs.createWriteStream(destPath);
           response.on('data', (chunk) => {
             downloadedSize += chunk.length;
@@ -80,7 +74,6 @@ function downloadFile(url, destPath, progressCallback) {
               progressCallback(downloadedSize, totalSize);
             }
           });
-
           response.pipe(file);
           file.on('finish', () => {
             file.close();
@@ -93,7 +86,6 @@ function downloadFile(url, destPath, progressCallback) {
         })
         .on('error', reject);
     };
-
     makeRequest(url);
   });
 }
@@ -103,7 +95,6 @@ async function extractZip(zipPath, destDir, platform) {
   return new Promise((resolve, reject) => {
     let proc;
     let stdout = '';
-
     if (platform === 'win32') {
       proc = spawn('powershell', ['-NoProfile', '-Command', `Expand-Archive -Path "${zipPath}" -DestinationPath "${destDir}" -Force`]);
     } else if (zipPath.endsWith('.zip')) {
@@ -118,7 +109,6 @@ async function extractZip(zipPath, destDir, platform) {
     proc.stderr.on('data', (data) => {
       stderr += data.toString();
     });
-
     proc.on('close', (code) => {
       if (code === 0) {
         resolve();
@@ -126,7 +116,6 @@ async function extractZip(zipPath, destDir, platform) {
         reject(new Error(`Extraction failed with code ${code}: ${stderr}`));
       }
     });
-
     proc.on('error', (error) => {
       reject(error);
     });
@@ -138,12 +127,9 @@ function findExecutable(dir, execNames) {
   if (!fs.existsSync(dir)) {
     return null;
   }
-
   const entries = fs.readdirSync(dir, { withFileTypes: true });
-
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
-
     if (entry.isDirectory()) {
       const found = findExecutable(fullPath, execNames);
       if (found) return found;
@@ -161,10 +147,8 @@ function listDirRecursive(dir, prefix = '') {
   if (!fs.existsSync(dir)) {
     return [];
   }
-
   const results = [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
-
   for (const entry of entries) {
     const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
     if (entry.isDirectory()) {
@@ -174,7 +158,6 @@ function listDirRecursive(dir, prefix = '') {
       results.push(relativePath);
     }
   }
-
   return results;
 }
 
@@ -203,21 +186,16 @@ async function getLatestReleaseUrl(archivePattern, repo) {
     };
     makeRequest(repo);
   });
-
   if (response.status !== 200) {
     throw new Error(`GitHub API returned ${response.status}`);
   }
-
   const releaseInfo = JSON.parse(response.data);
   log('Latest release: ' + releaseInfo.tag_name);
-
   const asset = releaseInfo.assets.find((a) => a.name === archivePattern);
-
   if (!asset) {
     const availableAssets = releaseInfo.assets.map((a) => a.name).join(', ');
     throw new Error(`Could not find ${archivePattern} in release. Available: ${availableAssets}`);
   }
-
   return asset.browser_download_url;
 }
 
@@ -230,13 +208,10 @@ function writeWavFile(filePath, audioData, sampleRate) {
   const dataSize = audioData.length * 2;
   const headerSize = 44;
   const fileSize = headerSize + dataSize - 8;
-
   const buffer = Buffer.alloc(headerSize + dataSize);
-
   buffer.write('RIFF', 0);
   buffer.writeUInt32LE(fileSize, 4);
   buffer.write('WAVE', 8);
-
   buffer.write('fmt ', 12);
   buffer.writeUInt32LE(16, 16);
   buffer.writeUInt16LE(1, 20);
@@ -245,16 +220,13 @@ function writeWavFile(filePath, audioData, sampleRate) {
   buffer.writeUInt32LE(byteRate, 28);
   buffer.writeUInt16LE(blockAlign, 32);
   buffer.writeUInt16LE(bitsPerSample, 34);
-
   buffer.write('data', 36);
   buffer.writeUInt32LE(dataSize, 40);
-
   for (let i = 0; i < audioData.length; i++) {
     const sample = Math.max(-1, Math.min(1, audioData[i]));
     const intSample = Math.round(sample * 32767);
     buffer.writeInt16LE(intSample, 44 + i * 2);
   }
-
   fs.writeFileSync(filePath, buffer);
 }
 
@@ -292,13 +264,10 @@ class DesktopTranscriber {
     const pluginDir = this.getPluginDir();
     const binDir = path.join(pluginDir, 'bin');
     const modelsDir = path.join(pluginDir, 'models');
-
     await this.ensureDir(binDir);
     await this.ensureDir(modelsDir);
-
     const platformInfo = getPlatformInfo();
     this.whisperPath = findExecutable(binDir, platformInfo.execNames);
-
     if (!this.whisperPath) {
       log('Downloading whisper executable');
       progressCallback({ status: 'downloading', message: 'Downloading whisper executable' });
@@ -312,17 +281,14 @@ class DesktopTranscriber {
     if (platformInfo.platform !== 'win32') {
       fs.chmodSync(this.whisperPath, 0o755);
     }
-
     log('Using whisper executable: ' + this.whisperPath);
     const modelFileName = MODEL_MAP[modelId] || 'ggml-base.en.bin';
     this.modelPath = path.join(modelsDir, modelFileName);
-
     if (!fs.existsSync(this.modelPath)) {
       log('Downloading model: ' + modelFileName);
       progressCallback({ status: 'downloading', message: 'Downloading model: ' + modelFileName });
       await this.downloadModel(modelFileName, progressCallback);
     }
-
     this.initialized = true;
     progressCallback({ status: 'ready' });
     log('Desktop transcriber initialized');
@@ -332,19 +298,15 @@ class DesktopTranscriber {
     const { path, fs } = this.getNodeModules();
     const url = await getLatestReleaseUrl(platformInfo.archivePattern, platformInfo.repo);
     const zipPath = path.join(binDir, platformInfo.platform !== 'linux' ? 'whisper.zip' : 'whisper.tar.gz');
-
     log('Downloading from: ' + url);
-
     await downloadFile(url, zipPath, (loaded, total) => {
       const pct = Math.round((loaded / total) * 100);
       const mb = (loaded / 1024 / 1024).toFixed(1);
       progressCallback({ status: 'progress', loaded, total, message: `Downloading executable: ${pct}% (${mb}MB)` });
     });
-
     log('Extracting archive');
     progressCallback({ status: 'extracting', message: 'Extracting' });
     await extractZip(zipPath, binDir, platformInfo.platform);
-
     try {
       fs.unlinkSync(zipPath);
     } catch (e) {
@@ -355,13 +317,11 @@ class DesktopTranscriber {
   async downloadModel(modelFileName, progressCallback) {
     const url = `${MODEL_BASE_URL}/${modelFileName}`;
     log('Downloading model from: ' + url);
-
     await downloadFile(url, this.modelPath, (loaded, total) => {
       const pct = Math.round((loaded / total) * 100);
       const mb = (loaded / 1024 / 1024).toFixed(1);
       progressCallback({ status: 'progress', loaded, total, message: `Downloading model: ${pct}% (${mb}MB)` });
     });
-
     log('Model downloaded: ' + this.modelPath);
   }
 
@@ -370,37 +330,28 @@ class DesktopTranscriber {
     if (!this.initialized) {
       throw new Error('Transcriber not initialized');
     }
-
     const tempDir = os.tmpdir();
     const tempWavPath = path.join(tempDir, `whisper-${Date.now()}.wav`);
-
     writeWavFile(tempWavPath, audioData, 16000);
     log('Wrote temp WAV: ' + tempWavPath);
-
     return new Promise((resolve, reject) => {
       const args = ['-m', this.modelPath, '-f', tempWavPath, '-nt', '-np'];
-
       log('Spawning whisper: ' + this.whisperPath + ' ' + args.join(' '));
       const proc = spawn(this.whisperPath, args);
-
       let stdout = '';
       let stderr = '';
-
       proc.stdout.on('data', (data) => {
         stdout += data.toString();
       });
-
       proc.stderr.on('data', (data) => {
         stderr += data.toString();
       });
-
       proc.on('close', (code) => {
         try {
           fs.unlinkSync(tempWavPath);
         } catch (e) {
           log('Failed to delete temp file', e);
         }
-
         if (code === 0) {
           const text = stdout.trim();
           log('Transcription result: ' + text);
@@ -410,7 +361,6 @@ class DesktopTranscriber {
           reject(new Error(`whisper.cpp exited with code ${code}: ${stderr}`));
         }
       });
-
       proc.on('error', (error) => {
         try {
           fs.unlinkSync(tempWavPath);

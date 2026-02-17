@@ -31,21 +31,17 @@ async function isModelCached(modelId) {
     const transformersCache = cacheNames.find(name =>
       name.includes('transformers') || name.includes('xenova')
     );
-
     if (!transformersCache) {
       log('No transformers cache found');
       return false;
     }
-
     const cache = await caches.open(transformersCache);
     const keys = await cache.keys();
-
     // Check if any cached URL contains the model ID
     const modelCached = keys.some(request =>
       request.url.includes(modelId.replace('/', '%2F')) ||
       request.url.includes(modelId)
     );
-
     log(`Model ${modelId} cached: ${modelCached}`);
     return modelCached;
   } catch (error) {
@@ -59,7 +55,6 @@ class WhisperTranscriptionPlugin extends Plugin {
     modelId: 'Xenova/whisper-base.en',
     chunkDurationMs: 10000,
   };
-
   transcriber = null;
   desktopTranscriber = null;
   isRecording = false;
@@ -76,7 +71,6 @@ class WhisperTranscriptionPlugin extends Plugin {
   async onload() {
     log('Plugin loading');
     await this.loadSettings();
-
     this.addCommand({
       id: 'toggle-transcription',
       name: 'Toggle Voice Transcription',
@@ -124,9 +118,7 @@ class WhisperTranscriptionPlugin extends Plugin {
       this.showStatus('Model is already loading', 3000);
       return false;
     }
-
     this.isModelLoading = true;
-
     try {
       // Desktop path: use whisper.cpp
       if (!isMobilePlatform) {
@@ -142,10 +134,8 @@ class WhisperTranscriptionPlugin extends Plugin {
         this.showStatus('Model ready', 2000);
         return true;
       }
-
       // Mobile path: use transformers.js
       const cached = await isModelCached(this.settings.modelId);
-
       if (cached) {
         this.showStatus('Loading model from cache', true);
         log('Loading model from cache (offline)');
@@ -153,7 +143,6 @@ class WhisperTranscriptionPlugin extends Plugin {
         this.showStatus(`Downloading model: ${this.settings.modelId}. This only happens once.`, true);
         log('Downloading model (online required)');
       }
-
       this.transcriber = await pipeline(
         'automatic-speech-recognition',
         this.settings.modelId,
@@ -174,7 +163,6 @@ class WhisperTranscriptionPlugin extends Plugin {
           },
         }
       );
-
       this.isModelLoading = false;
       log('Model loaded successfully');
       this.showStatus('Model ready', true);
@@ -214,12 +202,10 @@ class WhisperTranscriptionPlugin extends Plugin {
     }
     this.targetEditor = view.editor;
     log('Target editor set');
-
     if (!(await this.loadModel())) {
       log('Model not available, cannot start');
       return;
     }
-
     try {
       log('Requesting microphone access');
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -230,13 +216,11 @@ class WhisperTranscriptionPlugin extends Plugin {
           noiseSuppression: true,
         },
       });
-
       const tracks = this.mediaStream.getAudioTracks();
       log('Microphone access granted', {
         trackCount: tracks.length,
         trackSettings: tracks[0] ? tracks[0].getSettings() : null,
       });
-
 	  setIcon(this.ribbonIcon, 'mic');
       this.isRecording = true;
       this.chunkNumber = 0;
@@ -253,7 +237,6 @@ class WhisperTranscriptionPlugin extends Plugin {
       log('Not recording or no stream, skipping chunk');
       return;
     }
-
     this.chunkNumber++;
     const chunkNum = this.chunkNumber;
     log(`Starting chunk #${chunkNum}`);
@@ -273,7 +256,6 @@ class WhisperTranscriptionPlugin extends Plugin {
     const recorder = new MediaRecorder(this.mediaStream, mimeType ? { mimeType } : {});
     this.currentRecorder = recorder;
     const audioChunks = [];
-
     recorder.ondataavailable = (event) => {
       log(`Chunk #${chunkNum} data available`, {
         size: event.data ? event.data.size : 0,
@@ -282,13 +264,11 @@ class WhisperTranscriptionPlugin extends Plugin {
         audioChunks.push(event.data);
       }
     };
-
     recorder.onstop = () => {
       log(`Chunk #${chunkNum} recorder stopped`, {
         chunksCollected: audioChunks.length,
         totalSize: audioChunks.reduce((sum, c) => sum + c.size, 0),
       });
-
       if (audioChunks.length > 0) {
         const audioBlob = new Blob(audioChunks, { type: recorder.mimeType });
         log(`Chunk #${chunkNum} blob created`, {
@@ -299,7 +279,6 @@ class WhisperTranscriptionPlugin extends Plugin {
       } else {
         log(`Chunk #${chunkNum} NO AUDIO DATA`);
       }
-
       if (this.isStopping) {
         this.isStopping = false;
         if (this.mediaStream) {
@@ -312,7 +291,6 @@ class WhisperTranscriptionPlugin extends Plugin {
       } else if (this.isRecording && this.mediaStream) {
         this.recordChunk();
       }
-
     };
 
     recorder.onerror = (event) => {
@@ -351,14 +329,11 @@ class WhisperTranscriptionPlugin extends Plugin {
       log(`Chunk #${chunkNum} no target editor`);
       return;
     }
-
     this.processingCount++;
     log(`Chunk #${chunkNum} starting transcription, queue size: ${this.processingCount}`);
-
     if (this.processingCount === 1 && this.isRecording) {
       this.showStatus('Processing speech');
     }
-
     try {
       log(`Chunk #${chunkNum} converting blob to arrayBuffer`);
       const arrayBuffer = await audioBlob.arrayBuffer();
@@ -372,42 +347,31 @@ class WhisperTranscriptionPlugin extends Plugin {
         duration: audioBuffer.duration,
         channels: audioBuffer.numberOfChannels,
       });
-
       let audioData = audioBuffer.getChannelData(0);
-
       const targetSampleRate = 16000;
       if (audioBuffer.sampleRate !== targetSampleRate) {
         log(`Chunk #${chunkNum} resampling from ${audioBuffer.sampleRate} to ${targetSampleRate}`);
         audioData = this.resampleAudio(audioData, audioBuffer.sampleRate, targetSampleRate);
       }
-
       // Clamp audio to valid range [-1, 1]
       for (let i = 0; i < audioData.length; i++) {
         if (audioData[i] > 1) audioData[i] = 1;
         if (audioData[i] < -1) audioData[i] = -1;
       }
-
       log(`Chunk #${chunkNum} audio ready: ${audioData.length} samples (${(audioData.length / 16000).toFixed(2)}s)`);
-
       log(`Chunk #${chunkNum} calling transcriber`);
       const startTime = Date.now();
-
       const result = await this.transcriber(audioData);
-
       const elapsed = Date.now() - startTime;
       log(`Chunk #${chunkNum} transcription complete in ${elapsed}ms`, result);
-
       const text = result.text ? result.text.trim() : '';
       log(`Chunk #${chunkNum} extracted text: "${text}"`);
-
       if (text && text.length > 0 && text !== 'you') {
         if (this.targetEditor) {
           const cursor = this.targetEditor.getCursor();
           log(`Chunk #${chunkNum} inserting at cursor`, cursor);
-
           const insertText = text + ' ';
           this.targetEditor.replaceRange(insertText, cursor);
-
           const newPos = {
             line: cursor.line,
             ch: cursor.ch + insertText.length,
@@ -439,16 +403,13 @@ class WhisperTranscriptionPlugin extends Plugin {
       log('Was not recording');
       return;
     }
-
     this.isRecording = false;
     this.isStopping = true;
-
     if (this.currentRecorder && this.currentRecorder.state === 'recording') {
       log('Stopping current recorder');
       this.currentRecorder.stop();
     }
     this.currentRecorder = null;
-
     new Notice('Recording stopping');
   }
 
@@ -464,13 +425,10 @@ class WhisperSettingTab extends PluginSettingTab {
     super(app, plugin);
     this.plugin = plugin;
   }
-
   display() {
     const { containerEl } = this;
     containerEl.empty();
-
     containerEl.createEl('h2', { text: 'Whisper Transcription Settings' });
-
     new Setting(containerEl)
       .setName('Model')
       .setDesc('Smaller = faster, less accurate. Downloaded on first use.')
@@ -505,7 +463,6 @@ class WhisperSettingTab extends PluginSettingTab {
             }
           })
       );
-
     new Setting(containerEl)
       .setName('Chunk duration (seconds)')
       .setDesc('How often transcription runs. 10-15s recommended.')
@@ -519,7 +476,6 @@ class WhisperSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-
     new Setting(containerEl)
       .setName('Check model cache')
       .setDesc('See if the current model is cached for offline use')
