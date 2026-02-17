@@ -206,7 +206,6 @@ class WhisperTranscriptionPlugin extends Plugin {
       log('Already recording, ignoring start');
       return;
     }
-	setIcon(this.ribbonIcon, 'mic');
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view) {
       log('No active markdown view');
@@ -238,6 +237,7 @@ class WhisperTranscriptionPlugin extends Plugin {
         trackSettings: tracks[0] ? tracks[0].getSettings() : null,
       });
 
+	  setIcon(this.ribbonIcon, 'mic');
       this.isRecording = true;
       this.chunkNumber = 0;
       this.showStatus('Recording started', 2000);
