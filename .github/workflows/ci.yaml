@@ -99,9 +99,11 @@ jobs:
         run: |
           TAG=${GITHUB_REF#refs/tags/}
           npm version $TAG --no-git-tag-version
+          VERSION=${TAG#v}
+          jq --arg version "$VERSION" '.version = $version' manifest.json > tmp.json && mv tmp.json manifest.json
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add package.json
+          git add package.json manifest.json
           git commit --amend --no-edit
           git tag -f $TAG
       - name: Create proper GitHub Release
