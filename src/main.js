@@ -79,6 +79,18 @@ class WhisperTranscriptionPlugin extends Plugin {
       callback: () => this.toggleRecording(),
       icon: 'mic',
     });
+    this.addCommand({
+      id: 'start-transcription',
+      name: 'Start Voice Transcription',
+      callback: () => this.toggleRecording(true),
+      icon: 'mic',
+    });
+    this.addCommand({
+      id: 'stop-transcription',
+      name: 'Stop Voice Transcription',
+      callback: () => this.toggleRecording(false),
+      icon: 'mic-off',
+    });
     this.ribbonIcon = this.addRibbonIcon('mic-off', 'Toggle Voice Transcription', (evt) => {
       this.toggleRecording();
     });
@@ -182,12 +194,22 @@ class WhisperTranscriptionPlugin extends Plugin {
     }
   }
 
-  async toggleRecording() {
-    log('Toggle recording, current state: ' + this.isRecording);
+  async toggleRecording(state) {
+    if (state === true) {
+      log('Start recording, current state: ' + this.isRecording);
+    } else if (state === false) {
+      log('Stop recording, current state: ' + this.isRecording);
+    } else  {
+      log('Toggle recording, current state: ' + this.isRecording);
+    }
     if (this.isRecording) {
-      this.stopRecording();
+      if (state !== true) {
+        this.stopRecording();
+      }
     } else {
-      await this.startRecording();
+      if (state !== false) {
+        await this.startRecording();
+      }
     }
   }
 
