@@ -411,7 +411,7 @@ class WhisperTranscriptionPlugin extends Plugin {
       const chunkNum = this.nextInsertChunk;
       const text = this.pendingResults.get(chunkNum);
       this.pendingResults.delete(chunkNum);
-      if (text && text.length > 0 && text !== 'you' && text !== '[Blank Audio]') {
+      if (text && text.length > 0 && text !== 'you' && !(text.startsWith('[') && text.endsWith(']')) && !(text.startsWith('(')  && text.endsWith(')'))) {
         if (this.targetEditor) {
           const cursor = this.targetEditor.getCursor();
           log(`Chunk #${chunkNum} inserting at cursor`, cursor);
