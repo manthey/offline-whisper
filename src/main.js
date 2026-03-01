@@ -69,6 +69,7 @@ class WhisperTranscriptionPlugin extends Plugin {
   isStopping = false;
   nextInsertChunk = 1;
   pendingResults = new Map();
+  wakeLock = null;
 
   async onload() {
     log('Plugin loading');
@@ -120,6 +121,32 @@ class WhisperTranscriptionPlugin extends Plugin {
       this.statusNotice.hide();
     }
     this.statusNotice = new Notice(message, timeout);
+  }
+
+  async acquireWakeLock() {
+    if (!('wakeLock' in navigator)) {
+      log('Wake lock API not available');
+      return;
+    }
+    try {
+      this.wakeLock = await navigator.wakeLock.request('screen');
+      this.wakeLock.addEventListener('release', () => {
+        this.wakeLock = null;
+      });
+    } catch (error) {
+      this.wakeLock = null;
+    }
+  }
+
+  async releaseWakeLock() {
+    if (!this.wakeLock) {
+      return;
+    }
+    try {
+      await this.wakeLock.release();
+    } catch (error) {
+    }
+    this.wakeLock = null;
   }
 
   async loadModel() {
@@ -245,6 +272,7 @@ class WhisperTranscriptionPlugin extends Plugin {
         trackCount: tracks.length,
         trackSettings: tracks[0] ? tracks[0].getSettings() : null,
       });
+      await this.acquireWakeLock();
 	  setIcon(this.ribbonIcon, 'mic');
       this.isRecording = true;
       this.chunkNumber = 0;
@@ -436,6 +464,7 @@ class WhisperTranscriptionPlugin extends Plugin {
   stopRecording() {
     log('Stopping recording');
 	setIcon(this.ribbonIcon, 'mic-off');
+    this.releaseWakeLock();
     if (!this.isRecording) {
       log('Was not recording');
       return;
