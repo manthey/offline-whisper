@@ -6,7 +6,7 @@
   },
   "devDependencies": {
     "esbuild": "^0.27.3",
-    "playwright": "^1.58.2"
+    "playwright": "^1.60.0"
   },
   "dependencies": {
     "@xenova/transformers": "^2.17.2"
