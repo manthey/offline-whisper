@@ -125,7 +125,7 @@ async function runMobileTest() {
 
     console.log('  Result: "' + result.text + '"');
 
-    const expectedPhrase = process.env.EXPECTED_PHRASE || 'hello';
+    const expectedPhrase = process.env.EXPECTED_PHRASE || 'this is a test';
     const normalizedResult = result.text.toLowerCase().replace(/[^a-z0-9\s]/g, '');
     const normalizedExpected = expectedPhrase.toLowerCase();
 
