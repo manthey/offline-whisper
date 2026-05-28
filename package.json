@@ -2,7 +2,8 @@
   "name": "offline-whisper",
   "version": "0.0.0",
   "scripts": {
-    "build": "node build.js"
+    "build": "node build.js",
+    "tests": "npm run build && node tests/test_desktop.js && node tests/test_mobile.js"
   },
   "devDependencies": {
     "esbuild": "^0.28.0",
