@@ -33,7 +33,7 @@ async function run() {
     },
   };
 
-  const modelId = 'Xenova/whisper-tiny.en';
+  const modelId = 'onnx-community/whisper-tiny.en';
   const transcriber = new DesktopTranscriber(mockPlugin);
 
   console.log('Initializing desktop transcriber with model: ' + modelId);

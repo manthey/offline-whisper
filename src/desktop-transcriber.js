@@ -1,14 +1,14 @@
 const MODEL_BASE_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main';
 
 const MODEL_MAP = {
-  'Xenova/whisper-tiny.en': 'ggml-tiny.en.bin',
-  'Xenova/whisper-base.en': 'ggml-base.en.bin',
-  'Xenova/whisper-small.en': 'ggml-small.en.bin',
-  'Xenova/whisper-medium.en': 'ggml-medium.en.bin',
-  'Xenova/whisper-tiny': 'ggml-tiny.bin',
-  'Xenova/whisper-base': 'ggml-base.bin',
-  'Xenova/whisper-small': 'ggml-small.bin',
-  'Xenova/whisper-medium': 'ggml-medium.bin',
+  'onnx-community/whisper-tiny.en': 'ggml-tiny.en.bin',
+  'onnx-community/whisper-base.en': 'ggml-base.en.bin',
+  'onnx-community/whisper-small.en': 'ggml-small.en.bin',
+  'onnx-community/whisper-medium.en': 'ggml-medium.en.bin',
+  'onnx-community/whisper-tiny': 'ggml-tiny.bin',
+  'onnx-community/whisper-base': 'ggml-base.bin',
+  'onnx-community/whisper-small': 'ggml-small.bin',
+  'onnx-community/whisper-medium': 'ggml-medium.bin',
 };
 
 const nodeRequire = new Function('moduleName', 'return require(moduleName)');

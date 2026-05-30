@@ -6,7 +6,7 @@ let pipeline, env, DesktopTranscriber;
 const isMobilePlatform = typeof process === 'undefined' || !process.versions || !process.versions.electron;
 
 if (isMobilePlatform) {
-  const transformers = require('@xenova/transformers');
+  const transformers = require('@huggingface/transformers');
   pipeline = transformers.pipeline;
   env = transformers.env;
   env.useBrowserCache = true;
@@ -29,7 +29,7 @@ async function isModelCached(modelId) {
   try {
     const cacheNames = await caches.keys();
     const transformersCache = cacheNames.find(name =>
-      name.includes('transformers') || name.includes('xenova')
+      name.includes('transformers') || name.includes('xenova') || name.includes('huggingface') || name.includes('onnx-community')
     );
     if (!transformersCache) {
       log('No transformers cache found');
@@ -52,7 +52,7 @@ async function isModelCached(modelId) {
 
 class WhisperTranscriptionPlugin extends Plugin {
   settings = {
-    modelId: 'Xenova/whisper-base.en',
+    modelId: 'onnx-community/whisper-base.en',
     chunkDurationMs: 10000,
   };
   transcriber = null;
@@ -188,7 +188,10 @@ class WhisperTranscriptionPlugin extends Plugin {
         'automatic-speech-recognition',
         this.settings.modelId,
         {
-          quantized: true,
+          dtype: {
+            encoder_model: 'fp32',
+            decoder_model_merged: 'q4',
+          },
           progress_callback: (progress) => {
             if (progress.status === 'downloading' || progress.status === 'progress') {
               if (progress.total) {
@@ -500,14 +503,14 @@ class WhisperSettingTab extends PluginSettingTab {
       .setDesc('Smaller = faster, less accurate. Downloaded on first use.')
       .addDropdown((dropdown) =>
         dropdown
-          .addOption('Xenova/whisper-tiny.en', 'Tiny English')
-          .addOption('Xenova/whisper-base.en', 'Base English')
-          .addOption('Xenova/whisper-small.en', 'Small English')
-          .addOption('Xenova/whisper-medium.en', 'Medium English')
-          .addOption('Xenova/whisper-tiny', 'Tiny')
-          .addOption('Xenova/whisper-base', 'Base')
-          .addOption('Xenova/whisper-small', 'Small')
-          .addOption('Xenova/whisper-medium', 'Medium')
+          .addOption('onnx-community/whisper-tiny.en', 'Tiny English')
+          .addOption('onnx-community/whisper-base.en', 'Base English')
+          .addOption('onnx-community/whisper-small.en', 'Small English')
+          .addOption('onnx-community/whisper-medium.en', 'Medium English')
+          .addOption('onnx-community/whisper-tiny', 'Tiny')
+          .addOption('onnx-community/whisper-base', 'Base')
+          .addOption('onnx-community/whisper-small', 'Small')
+          .addOption('onnx-community/whisper-medium', 'Medium')
           .setValue(this.plugin.settings.modelId)
           .onChange(async (value) => {
             this.plugin.settings.modelId = value;
@@ -580,7 +583,7 @@ class WhisperSettingTab extends PluginSettingTab {
               } else {
                 const cacheNames = await caches.keys();
                 for (const name of cacheNames) {
-                  if (name.includes('transformers') || name.includes('xenova')) {
+                  if (name.includes('transformers') || name.includes('xenova') || name.includes('huggingface') || name.includes('onnx-community')) {
                     await caches.delete(name);
                   }
                 }
