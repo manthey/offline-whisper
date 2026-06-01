@@ -3,10 +3,11 @@
   "version": "0.0.0",
   "scripts": {
     "build": "node build.js",
-    "tests": "npm run build && node tests/test_desktop.js && node tests/test_mobile.js"
+    "tests": "npm run build && npx nyc node tests/test_desktop.js && npx nyc node tests/test_mobile.js"
   },
   "devDependencies": {
     "esbuild": "^0.28.0",
+    "nyc": "^18.0.0",
     "playwright": "^1.60.0"
   },
   "dependencies": {
