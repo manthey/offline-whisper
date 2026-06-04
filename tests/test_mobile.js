@@ -1,6 +1,8 @@
 const { chromium } = require('playwright');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const v8toIstanbul = require('v8-to-istanbul');
 const http = require('http');
 
 function parseWavFile(filePath) {
@@ -63,12 +65,20 @@ function resampleAudio(audioData, fromSampleRate, toSampleRate) {
   return result;
 }
 
-function startServer(htmlPath, port) {
+function startServer(rootDir, port) {
+  const contentTypes = { '.html': 'text/html', '.js': 'text/javascript' };
   return new Promise((resolve) => {
-    const htmlContent = fs.readFileSync(htmlPath, 'utf8');
     const server = http.createServer((req, res) => {
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(htmlContent);
+      const requestPath = req.url === '/' ? '/test_mobile.html' : req.url;
+      const resolved = path.normalize(path.join(rootDir, requestPath));
+      if (!resolved.startsWith(rootDir) || !fs.existsSync(resolved)) {
+        res.writeHead(404);
+        res.end('Not found');
+        return;
+      }
+      const ext = path.extname(resolved);
+      res.writeHead(200, { 'Content-Type': contentTypes[ext] || 'application/octet-stream' });
+      res.end(fs.readFileSync(resolved));
     });
     server.listen(port, () => {
       resolve(server);
@@ -77,8 +87,8 @@ function startServer(htmlPath, port) {
 }
 
 async function runMobileTest() {
-  const htmlPath = path.join(__dirname, 'test_mobile.html');
   const audioPath = path.join(__dirname, 'test_audio.wav');
+  const bundlePath = path.join(__dirname, '..', 'main.js');
 
   if (!fs.existsSync(audioPath)) {
     throw new Error('Test audio file not found: ' + audioPath);
@@ -91,7 +101,11 @@ async function runMobileTest() {
 
   console.log('Starting test server');
   const port = 8765;
-  const server = await startServer(htmlPath, port);
+  const serveDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'whisper-mobile-'));
+  fs.copyFileSync(path.join(__dirname, 'test_mobile.html'), path.join(serveDir, 'test_mobile.html'));
+  fs.copyFileSync(path.join(__dirname, 'obsidian-mock.js'), path.join(serveDir, 'obsidian-mock.js'));
+  fs.copyFileSync(bundlePath, path.join(serveDir, 'main.js'));
+  const server = await startServer(serveDir, port);
   console.log('  Server running on port ' + port);
 
   let browser;
@@ -113,6 +127,7 @@ async function runMobileTest() {
 
     console.log('Loading test page');
     await page.goto('http://localhost:' + port, { timeout: 120000 });
+    await page.coverage.startJSCoverage();
 
     console.log('Waiting for transformers.js to load');
     await page.waitForFunction(() => window.transformersReady === true, { timeout: 300000 });
@@ -130,15 +145,37 @@ async function runMobileTest() {
     const normalizedExpected = expectedPhrase.toLowerCase();
 
     if (!normalizedResult.includes(normalizedExpected)) {
-      throw new Error('Transcription verification failed.\n' + '  Expected phrase: "' + expectedPhrase + '"\n' + '  Actual result: "' + result.text + '"');
+      throw new Error(
+        'Transcription verification failed.\n' +
+          '  Expected phrase: "' +
+          expectedPhrase +
+          '"\n' +
+          '  Actual result: "' +
+          result.text +
+          '"',
+      );
     }
 
     console.log('Mobile test passed.');
+    const coverage = await page.coverage.stopJSCoverage();
+    const converter = v8toIstanbul(bundlePath);
+    for (const entry of coverage) {
+      if (entry.url.endsWith('/main.js')) {
+        await converter.load();
+        converter.applyCoverage(entry.functions);
+        break;
+      }
+    }
+    const istanbulCoverage = converter.toIstanbul();
+    const nycOutput = path.join(process.cwd(), '.nyc_output');
+    if (!fs.existsSync(nycOutput)) fs.mkdirSync(nycOutput, { recursive: true });
+    fs.writeFileSync(path.join(nycOutput, 'mobile-' + Date.now() + '.json'), JSON.stringify(istanbulCoverage));
   } finally {
     if (browser) {
       await browser.close();
     }
     server.close();
+    fs.rmSync(serveDir, { recursive: true, force: true });
   }
 }
 
