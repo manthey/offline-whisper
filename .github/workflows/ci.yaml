@@ -26,7 +26,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Run desktop test
-        run: node tests/test_desktop.js
+        run: npx nyc node tests/test_desktop.js
         env:
           EXPECTED_PHRASE: this is a test
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -46,8 +46,10 @@ jobs:
         run: npm ci
       - name: Install Playwright
         run: npx playwright install chromium --with-deps
+      - name: Build
+        run: npm run build
       - name: Run mobile test
-        run: node tests/test_mobile.js
+        run: npx nyc node tests/test_mobile.js
         env:
           EXPECTED_PHRASE: this is a test
 

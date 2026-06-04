@@ -155,7 +155,9 @@ function readWavAsFloat32(wavPath) {
     }
   }
 
-  console.log('WAV info: ' + sampleRate + 'Hz, ' + numChannels + 'ch, ' + bitsPerSample + 'bit, ' + totalSamples + ' samples');
+  console.log(
+    'WAV info: ' + sampleRate + 'Hz, ' + numChannels + 'ch, ' + bitsPerSample + 'bit, ' + totalSamples + ' samples',
+  );
 
   return audioData;
 }

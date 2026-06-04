@@ -3,12 +3,15 @@
   "version": "0.0.0",
   "scripts": {
     "build": "node build.js",
+    "format": "prettier -w manifest.json package.json src/*.js tests/*.js",
     "tests": "npm run build && npx nyc node tests/test_desktop.js && npx nyc node tests/test_mobile.js"
   },
   "devDependencies": {
     "esbuild": "^0.28.0",
     "nyc": "^18.0.0",
-    "playwright": "^1.60.0"
+    "playwright": "^1.60.0",
+    "prettier": "^3.5.3",
+    "v8-to-istanbul": "^9.3.0"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.0.0"
