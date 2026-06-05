@@ -1,4 +1,5 @@
 const esbuild = require('esbuild');
+const coverage = process.argv.includes('--coverage');
 
 esbuild
   .build({
@@ -10,7 +11,8 @@ esbuild
     target: 'es2020',
     external: ['obsidian'],
     minify: false,
-    sourcemap: false,
+    sourcemap: coverage ? 'inline' : false,
+    sourcesContent: true,
   })
   .then(() => {
     console.log(`Build complete`);

@@ -126,8 +126,8 @@ async function runMobileTest() {
     });
 
     console.log('Loading test page');
+    await page.coverage.startJSCoverage({ resetOnNavigation: false });
     await page.goto('http://localhost:' + port, { timeout: 120000 });
-    await page.coverage.startJSCoverage();
 
     console.log('Waiting for transformers.js to load');
     await page.waitForFunction(() => window.transformersReady === true, { timeout: 300000 });

@@ -47,7 +47,7 @@ jobs:
       - name: Install Playwright
         run: npx playwright install chromium --with-deps
       - name: Build
-        run: npm run build
+        run: node build.js --coverage
       - name: Run mobile test
         run: npx nyc node tests/test_mobile.js
         env:
