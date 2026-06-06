@@ -44,7 +44,7 @@ function getPlatformInfo() {
   } else if (platform === 'darwin') {
     repo = 'https://api.github.com/repos/bizenlabs/whisper-cpp-macos-bin/releases/latest';
     archivePattern =
-      arch === 'arm64' ? 'whisper-cpp-v1.8.2-macos-arm64-metal.zip' : 'whisper-cpp-v1.8.2-macos-arm64-metal.zip';
+      arch === 'arm64' ? 'whisper-cpp-v1.8.2-macos-arm64-metal.zip' : 'whisper-cpp-v1.8.2-macos-x64-metal.zip';
   } else if (platform === 'linux') {
     archivePattern = 'whisper-bin-blas-linux-x64.tar.gz';
     repo = 'https://api.github.com/repos/dscripka/whisper.cpp_binaries/releases/latest';
