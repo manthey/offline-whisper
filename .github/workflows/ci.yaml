@@ -48,8 +48,10 @@ jobs:
         run: npx playwright install chromium --with-deps
       - name: Build
         run: node build.js --coverage
+      - name: Run UI tests
+        run: npx jest
       - name: Run mobile test
-        run: npx nyc node tests/test_mobile.js
+        run: npx nyc --clean false node tests/test_mobile.js
         env:
           EXPECTED_PHRASE: this is a test
 
