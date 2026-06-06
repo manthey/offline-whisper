@@ -167,6 +167,11 @@ async function runMobileTest() {
       }
     }
     const istanbulCoverage = converter.toIstanbul();
+    for (const key of Object.keys(istanbulCoverage)) {
+      if (key.includes('desktop-transcriber')) {
+        delete istanbulCoverage[key];
+      }
+    }
     const nycOutput = path.join(process.cwd(), '.nyc_output');
     if (!fs.existsSync(nycOutput)) fs.mkdirSync(nycOutput, { recursive: true });
     fs.writeFileSync(path.join(nycOutput, 'mobile-' + Date.now() + '.json'), JSON.stringify(istanbulCoverage));
