@@ -600,3 +600,4 @@ class WhisperSettingTab extends PluginSettingTab {
 }
 
 module.exports = WhisperTranscriptionPlugin;
+module.exports.WhisperSettingTab = WhisperSettingTab;

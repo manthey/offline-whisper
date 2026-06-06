@@ -4,11 +4,15 @@
   "scripts": {
     "build": "node build.js",
     "format": "prettier -w manifest.json package.json src/*.js tests/*.js",
-    "tests": "node build.js --coverage && npx nyc node tests/test_desktop.js && npx nyc --clean false -r text -r cobertura node tests/test_mobile.js"
+    "tests": "node build.js --coverage && npx nyc node tests/test_desktop.js && npx jest && npx nyc --clean false -r text -r cobertura node tests/test_mobile.js"
   },
   "devDependencies": {
     "esbuild": "^0.28.0",
+    "jest": "^30.0.0",
+    "jest-environment-jsdom": "^30.0.0",
     "nyc": "^18.0.0",
+    "obsidian": "^1.7.2",
+    "obsidian-test-mocks": "^3.0.0",
     "playwright": "^1.60.0",
     "prettier": "^3.5.3",
     "v8-to-istanbul": "^9.3.0"
