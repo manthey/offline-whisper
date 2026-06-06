@@ -575,7 +575,7 @@ class WhisperSettingTab extends PluginSettingTab {
             button.setDisabled(true);
             try {
               if (!isMobilePlatform) {
-                if (!this.plugin.destopTransriber) {
+                if (!this.plugin.desktopTranscriber) {
                   this.plugin.desktopTranscriber = new DesktopTranscriber(this.plugin);
                 }
                 this.plugin.desktopTranscriber.clearCache();
