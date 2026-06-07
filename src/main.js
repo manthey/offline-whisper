@@ -499,6 +499,9 @@ class WhisperSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.createEl('h2', { text: 'Whisper Transcription Settings' });
     new Setting(containerEl)
+      .setName('Version')
+      .setDesc(this.plugin.manifest.version || 'unknown');
+    new Setting(containerEl)
       .setName('Model')
       .setDesc('Smaller = faster, less accurate. Downloaded on first use.')
       .addDropdown((dropdown) =>
