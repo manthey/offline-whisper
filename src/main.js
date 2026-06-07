@@ -197,7 +197,7 @@ class WhisperTranscriptionPlugin extends Plugin {
               if (progress.total) {
                 const pct = Math.round((progress.loaded / progress.total) * 100);
                 const mb = Math.round(progress.loaded / 1024 / 1024);
-                this.showStatus(`${cached? "Downloading" : "Loading"}: ${pct}% (${mb}MB)`, true);
+                this.showStatus(`${cached? "Loading" : "Downloading"}: ${pct}% (${mb}MB)`, true);
               }
             } else if (progress.status === 'loading') {
               this.showStatus('Initializing model', true);
