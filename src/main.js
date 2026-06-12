@@ -514,6 +514,8 @@ class WhisperSettingTab extends PluginSettingTab {
           .addOption('onnx-community/whisper-base', 'Base')
           .addOption('onnx-community/whisper-small', 'Small')
           .addOption('onnx-community/whisper-medium', 'Medium')
+          .addOption('onnx-community/whisper-large-v3', 'Large')
+          .addOption('onnx-community/whisper-large-v3-turbo', 'Large Turbo')
           .setValue(this.plugin.settings.modelId)
           .onChange(async (value) => {
             this.plugin.settings.modelId = value;

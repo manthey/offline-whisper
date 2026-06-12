@@ -9,6 +9,8 @@ const MODEL_MAP = {
   'onnx-community/whisper-base': 'ggml-base.bin',
   'onnx-community/whisper-small': 'ggml-small.bin',
   'onnx-community/whisper-medium': 'ggml-medium.bin',
+  'onnx-community/whisper-large-v3': 'ggml-large-v3.bin',
+  'onnx-community/whisper-large-v3-turbo': 'ggml-large-v3-turbo.bin',
 };
 
 const nodeRequire = new Function('moduleName', 'return require(moduleName)');
