@@ -40,6 +40,9 @@ repos:
     hooks:
       - id: codespell
         exclude: package-lock.json
+        args:
+          - --ignore-words-list
+          - afterAll
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: v4.0.0-alpha.8
     hooks:
