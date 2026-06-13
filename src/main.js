@@ -51,9 +51,11 @@ async function isModelCached(modelId) {
 }
 
 class WhisperTranscriptionPlugin extends Plugin {
+  defaultFilter = '^(?:you|okay)$|^\\[.*\\]$|^\\(.*\\)$';
   settings = {
     modelId: 'onnx-community/whisper-base.en',
     chunkDurationMs: 10000,
+    regexFilter: this.defaultFilter,
   };
   transcriber = null;
   desktopTranscriber = null;
@@ -442,7 +444,14 @@ class WhisperTranscriptionPlugin extends Plugin {
       const chunkNum = this.nextInsertChunk;
       const text = this.pendingResults.get(chunkNum);
       this.pendingResults.delete(chunkNum);
-      if (text && text.length > 0 && text !== 'you' && text !== 'okay' && !(text.startsWith('[') && text.endsWith(']')) && !(text.startsWith('(')  && text.endsWith(')'))) {
+      let filterRegex = new RegExp(this.defaultFilter);
+      if (this.settings.regexFilter) {
+        try {
+          filterRegex = new RegExp(this.settings.regexFilter);
+          console.log(filterRegex); // DWM::
+        } catch (e) { }
+      }
+      if (text && text.length > 0 && !filterRegex.test(text)) {
         if (this.targetEditor) {
           const cursor = this.targetEditor.getCursor();
           log(`Chunk #${chunkNum} inserting at cursor`, cursor);
@@ -545,6 +554,18 @@ class WhisperSettingTab extends PluginSettingTab {
           .setDynamicTooltip()
           .onChange(async (value) => {
             this.plugin.settings.chunkDurationMs = value * 1000;
+            await this.plugin.saveSettings();
+          })
+      );
+    new Setting(containerEl)
+      .setName('Regex Filter')
+      .setDesc('Regex pattern for filtering out unwanted transcription fragments. Models often emit incorrect noise, especially during silence.  Default filters "you", "okay", and bracketed text.')
+      .addText((text) =>
+        text
+          .setPlaceholder('Enter regex pattern')
+          .setValue(this.plugin.settings.regexFilter)
+          .onChange(async (value) => {
+            this.plugin.settings.regexFilter = value;
             await this.plugin.saveSettings();
           })
       );
