@@ -442,3 +442,201 @@ describe('flushPendingResults filtering', () => {
     expect(mockEditorReplaceRangeCalls[0]).toBe('hello ');
   });
 });
+
+describe('startRecording with markdown view integration', () => {
+  let originalUserMedia;
+  let originalAudioBuffer;
+
+  beforeAll(() => {
+    Blob.prototype.arrayBuffer = function () {
+      return Promise.resolve(new Uint8Array([0, 1, 2, 3]).buffer);
+    };
+
+    global.AudioBuffer = class {
+      constructor() {
+        this.sampleRate = 16000;
+        this.duration = 1.5;
+        this.numberOfChannels = 1;
+      }
+      getChannelData(channel) {
+        return new Float32Array(24000).fill(0.1);
+      }
+    };
+  });
+
+  afterAll(() => {
+    if (originalAudioBuffer) global.AudioBuffer = originalAudioBuffer;
+  });
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+
+    const mockAudioTrack = {
+      getSettings: () => ({ sampleRate: 16000 }),
+      stop: () => {},
+    };
+    const mockMediaStream = {
+      getAudioTracks: () => [mockAudioTrack],
+      getTracks: () => [mockAudioTrack],
+    };
+
+    global.navigator.mediaDevices = {
+      getUserMedia: jest.fn(() => Promise.resolve(mockMediaStream)),
+    };
+
+    global.AudioContext = jest.fn(() => ({
+      decodeAudioData: jest.fn(() =>
+        Promise.resolve({
+          sampleRate: 16000,
+          duration: 1.5,
+          numberOfChannels: 1,
+          getChannelData: () => new Float32Array(24000),
+        }),
+      ),
+    }));
+
+    let onstopCallback = null;
+    const mockRecorderInstance = {
+      state: 'recording',
+      mimeType: 'audio/webm',
+      start: jest.fn(),
+      stop: jest.fn(() => {
+        if (onstopCallback) onstopCallback();
+      }),
+    };
+
+    Object.defineProperty(mockRecorderInstance, 'onstop', {
+      get() {
+        return onstopCallback;
+      },
+      set(fn) {
+        if (fn) onstopCallback = fn;
+      },
+    });
+
+    global.MediaRecorder = jest.fn(() => mockRecorderInstance);
+    global.MediaRecorder.isTypeSupported = jest.fn(() => true);
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+    jest.useRealTimers();
+    delete global.AudioContext;
+    delete global.MediaRecorder;
+  });
+
+  test('startRecording with valid markdown view starts recording and creates recorder', async () => {
+    const { app, plugin } = createPlugin();
+
+    // Mock a markdown view
+    const mockEditor = { getCursor: () => ({ line: 0, ch: 0 }), setCursor: () => {} };
+    const mockView = { markdown: null, editor: mockEditor };
+    app.workspace.getActiveViewOfType = jest.fn(() => mockView);
+
+    await plugin.onload();
+
+    // Mock the transcriber to succeed
+    const mockTranscriber = jest.fn(() => Promise.resolve({ text: 'test' }));
+    plugin.transcriber = mockTranscriber;
+
+    // Reset any previous recording state
+    plugin.isRecording = false;
+    plugin.targetEditor = null;
+
+    // Mock wakeLock for testing
+    let wakeLockReleased = false;
+    plugin.wakeLock = {
+      release: () => {
+        wakeLockReleased = true;
+      },
+    };
+
+    // Start recording with valid view
+    await plugin.startRecording();
+
+    expect(app.workspace.getActiveViewOfType).toHaveBeenCalledWith(require('obsidian').MarkdownView);
+    expect(plugin.isRecording).toBe(true);
+    expect(plugin.targetEditor).toBe(mockEditor);
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalled();
+
+    // Verify recorder was created
+    expect(global.MediaRecorder).toHaveBeenCalled();
+    expect(plugin.currentRecorder).not.toBeNull();
+    expect(plugin.currentRecorder.state).toBe('recording');
+  });
+
+  test('recordChunk creates MediaRecorder when called with valid stream', async () => {
+    const { app, plugin } = createPlugin();
+
+    // Mock a markdown view
+    const mockEditor = { getCursor: () => ({ line: 0, ch: 0 }), setCursor: () => {} };
+    const mockView = { markdown: null, editor: mockEditor };
+    app.workspace.getActiveViewOfType = jest.fn(() => mockView);
+
+    await plugin.onload();
+    plugin.targetEditor = mockEditor;
+    plugin.isRecording = true;
+    plugin.chunkNumber = 0;
+    plugin.settings.chunkDurationMs = 50; // Short duration for fast test
+
+    const mockAudioTrack = {
+      getSettings: () => ({ sampleRate: 16000 }),
+      stop: () => {},
+    };
+    const mockMediaStream = {
+      getAudioTracks: () => [mockAudioTrack],
+      getTracks: () => [mockAudioTrack],
+    };
+    plugin.mediaStream = mockMediaStream;
+
+    await plugin.recordChunk();
+
+    expect(plugin.chunkNumber).toBe(1);
+    expect(global.MediaRecorder).toHaveBeenCalled();
+
+    const recorder = global.MediaRecorder.mock.results[0].value;
+    expect(recorder.start).toHaveBeenCalled();
+  });
+
+  test('stopRecording with valid view cleans up properly', async () => {
+    const { app, plugin } = createPlugin();
+
+    // Mock a markdown view
+    const mockEditor = { getCursor: () => ({ line: 0, ch: 0 }), setCursor: () => {} };
+    const mockView = { markdown: null, editor: mockEditor };
+    app.workspace.getActiveViewOfType = jest.fn(() => mockView);
+
+    await plugin.onload();
+    plugin.targetEditor = mockEditor;
+    plugin.isRecording = true;
+    plugin.mediaStream = {};
+
+    // Set up a recorder
+    let onstopCallback = null;
+    const mockRecorderInstance = {
+      state: 'recording',
+      mimeType: 'audio/webm',
+      start: jest.fn(),
+      stop: jest.fn(() => {
+        if (onstopCallback) onstopCallback();
+      }),
+    };
+
+    Object.defineProperty(mockRecorderInstance, 'onstop', {
+      get() {
+        return onstopCallback;
+      },
+      set(fn) {
+        if (fn) onstopCallback = fn;
+      },
+    });
+
+    plugin.currentRecorder = mockRecorderInstance;
+
+    // Stop recording
+    await plugin.stopRecording();
+
+    expect(plugin.isRecording).toBe(false);
+    expect(mockRecorderInstance.stop).toHaveBeenCalled();
+  });
+});
