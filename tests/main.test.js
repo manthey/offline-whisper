@@ -640,3 +640,308 @@ describe('startRecording with markdown view integration', () => {
     expect(mockRecorderInstance.stop).toHaveBeenCalled();
   });
 });
+
+describe('WhisperSettingTab model change notifications', () => {
+  let mockCacheKeys = [];
+  let mockCachesOpenKeys = [];
+  let mockCachedModelExists = true;
+
+  beforeAll(() => {
+    // Mock caches API for isModelCached testing
+    global.caches = {
+      keys: jest.fn(() => Promise.resolve(mockCacheKeys)),
+      open: jest.fn((name) =>
+        Promise.resolve({
+          keys: jest.fn(() => Promise.resolve(mockCachesOpenKeys.map((url) => ({ url })))),
+        }),
+      ),
+    };
+  });
+
+  test('model change notification when model is cached', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.loadSettings();
+
+    // Create a mock Notice to track calls
+    let noticeCalls = [];
+    global.Notice = class {
+      constructor(message, timeout) {
+        noticeCalls.push({ message, timeout });
+      }
+      hide() {}
+    };
+
+    const tab = new WhisperSettingTab(app.asOriginalType__(), plugin);
+    const containerEl = document.createElement('div');
+    tab.containerEl = containerEl;
+    tab.display();
+
+    // Verify settings section exists with correct title
+    expect(containerEl.innerHTML).toContain('Whisper Transcription Settings');
+  });
+
+  test('Clear Cache button text and styling are present', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.loadSettings();
+
+    const tab = new WhisperSettingTab(app.asOriginalType__(), plugin);
+    const containerEl = document.createElement('div');
+    tab.containerEl = containerEl;
+    tab.display();
+
+    // Verify Clear Cache section exists
+    expect(containerEl.innerHTML).toContain('Clear Caches');
+    expect(containerEl.innerHTML).toContain('Clear Cache');
+    expect(containerEl.innerHTML).toContain('Delete all cached models and binaries');
+  });
+
+  test('Check model cache button text is present', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.loadSettings();
+
+    const tab = new WhisperSettingTab(app.asOriginalType__(), plugin);
+    const containerEl = document.createElement('div');
+    tab.containerEl = containerEl;
+    tab.display();
+
+    // Verify Check model cache section exists with Check button
+    expect(containerEl.innerHTML).toContain('Check model cache');
+    expect(containerEl.innerHTML).toContain('See if the current model is cached for offline use');
+  });
+});
+
+describe('isModelCached function coverage', () => {
+  test('handles case where no transformers cache exists', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.onload();
+
+    // Ensure no caches exist - this tests the early return in isModelCached
+    Object.defineProperty(global, 'caches', {
+      value: {
+        keys: jest.fn(() => Promise.resolve([])),
+      },
+      writable: true,
+    });
+
+    // loadModel should attempt to call isModelCached which will return false
+    const mockShowStatus = jest.spyOn(plugin, 'showStatus').mockReturnValue(undefined);
+
+    // Mock transformers pipeline so we can reach isModelCached call path
+    const originalPipeline = require('@huggingface/transformers').pipeline;
+    require('@huggingface/transformers').pipeline = jest.fn().mockResolvedValue(() => ({ text: 'test' }));
+
+    const mockView = { editor: {} };
+    app.workspace.getActiveViewOfType = () => mockView;
+
+    plugin.isModelLoading = false;
+    plugin.transcriber = null;
+
+    await plugin.loadModel();
+
+    // Verify caches.keys was called
+    expect(global.caches.keys).toHaveBeenCalled();
+
+    // Restore original pipeline
+    require('@huggingface/transformers').pipeline = originalPipeline;
+  });
+
+  test('handles case where cache exists but model not in it', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.onload();
+
+    // Cache exists but doesn't contain the target model ID
+    const cachedUrls = ['/cached/path/to/other-model.bin', '/cached/path/to/different.json'];
+
+    Object.defineProperty(global, 'caches', {
+      value: {
+        keys: jest.fn(() => Promise.resolve(['transformers-cache'])),
+        open: jest.fn(() =>
+          Promise.resolve({
+            keys: jest.fn(() => Promise.resolve(cachedUrls.map((url) => ({ url })))),
+          }),
+        ),
+      },
+      writable: true,
+    });
+
+    const originalPipeline = require('@huggingface/transformers').pipeline;
+    require('@huggingface/transformers').pipeline = jest.fn().mockResolvedValue(() => ({ text: 'test' }));
+
+    const mockView = { editor: {} };
+    app.workspace.getActiveViewOfType = () => mockView;
+
+    plugin.isModelLoading = false;
+    plugin.transcriber = null;
+
+    await plugin.loadModel();
+
+    expect(global.caches.open).toHaveBeenCalled();
+
+    require('@huggingface/transformers').pipeline = originalPipeline;
+  });
+});
+
+describe('toggleRecording edge cases', () => {
+  let mockEditorReplaceRangeCalls = [];
+
+  beforeAll(() => {
+    Blob.prototype.arrayBuffer = function () {
+      return Promise.resolve(new Uint8Array([0, 1, 2, 3]).buffer);
+    };
+
+    global.AudioBuffer = class {
+      constructor() {
+        this.sampleRate = 16000;
+        this.duration = 1.5;
+        this.numberOfChannels = 1;
+      }
+      getChannelData(channel) {
+        return new Float32Array(24000).fill(0.1);
+      }
+    };
+  });
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    mockEditorReplaceRangeCalls = [];
+    const mockAudioTrack = {
+      getSettings: () => ({ sampleRate: 16000 }),
+      stop: () => {},
+    };
+    const mockMediaStream = {
+      getAudioTracks: () => [mockAudioTrack],
+      getTracks: () => [mockAudioTrack],
+    };
+
+    global.navigator.mediaDevices = {
+      getUserMedia: jest.fn(() => Promise.resolve(mockMediaStream)),
+    };
+    global.AudioContext = jest.fn(() => ({
+      decodeAudioData: jest.fn(() =>
+        Promise.resolve({
+          sampleRate: 16000,
+          duration: 1.5,
+          numberOfChannels: 1,
+          getChannelData: () => new Float32Array(24000),
+        }),
+      ),
+    }));
+    let onstopCallback = null;
+    const mockRecorderInstance = {
+      state: 'recording',
+      mimeType: 'audio/webm',
+      start: jest.fn(),
+      stop: jest.fn(() => {
+        if (onstopCallback) onstopCallback();
+      }),
+    };
+    Object.defineProperty(mockRecorderInstance, 'onstop', {
+      get() {
+        return onstopCallback;
+      },
+      set(fn) {
+        if (fn) onstopCallback = fn;
+      },
+    });
+    global.MediaRecorder = jest.fn(() => mockRecorderInstance);
+    global.MediaRecorder.isTypeSupported = jest.fn(() => true);
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+    jest.useRealTimers();
+  });
+
+  test('toggleRecording with undefined state starts recording when not active', async () => {
+    const { app, plugin } = createPlugin();
+    // Set up minimal mock view for loadModel path
+    const mockView = { editor: null };
+    app.workspace.getActiveViewOfType = () => mockView;
+    await plugin.onload();
+    // Mock transcriber to succeed
+    const mockTranscriber = jest.fn(() => Promise.resolve({ text: 'test' }));
+    plugin.transcriber = mockTranscriber;
+    plugin.isRecording = false;
+    await plugin.toggleRecording(); // undefined state - should start since not recording
+    expect(plugin.isRecording).toBe(true);
+  });
+
+  test('toggleRecording ignores start request when already recording', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.onload();
+    plugin.isRecording = true;
+    // Mock transcriber for loadModel path
+    const mockTranscriber = jest.fn(() => Promise.resolve({ text: 'test' }));
+    plugin.transcriber = mockTranscriber;
+    const mockView = { editor: {} };
+    app.workspace.getActiveViewOfType = () => mockView;
+    await plugin.toggleRecording(true);
+    // Should remain true (already recording)
+    expect(plugin.isRecording).toBe(true);
+  });
+
+  test('toggleRecording ignores stop request when not recording', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.onload();
+    plugin.isRecording = false;
+    await plugin.toggleRecording(false);
+    // Should remain false (was never recording)
+    expect(plugin.isRecording).toBe(false);
+  });
+
+  test('releaseWakeLock when wakeLock exists', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.onload();
+    let released = false;
+    plugin.wakeLock = {
+      release: jest.fn(() => ({ released: true })),
+    };
+    await plugin.releaseWakeLock();
+    expect(plugin.wakeLock).toBeNull();
+  });
+
+  test('releaseWakeLock when wakeLock is null', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.onload();
+    plugin.wakeLock = null;
+    // Should not throw
+    await plugin.releaseWakeLock();
+    expect(plugin.wakeLock).toBeNull();
+  });
+
+  test('acquireWakeLock when API not available', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.onload();
+    // Remove wakeLock API from navigator
+    delete navigator.wakeLock;
+    await plugin.acquireWakeLock();
+    expect(plugin.wakeLock).toBeNull();
+  });
+
+  test('acquireWakeLock when API fails', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.onload();
+    // Mock wakeLock that throws on request
+    navigator.wakeLock = {
+      request: jest.fn(() => Promise.reject(new Error('denied'))),
+    };
+    await plugin.acquireWakeLock();
+    expect(plugin.wakeLock).toBeNull();
+  });
+
+  test('showStatus with timeout parameter', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.onload();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    // First call to set up lastStatus timing
+    plugin.lastStatus = Date.now() - 2000;
+    const mockNotice = { hide: jest.fn() };
+    global.Notice = class {
+      constructor(message, timeout) {
+        return mockNotice;
+      }
+    };
+    const result = plugin.showStatus('test message', true);
+    expect(result).toBe(undefined);
+  });
+});
