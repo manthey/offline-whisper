@@ -563,6 +563,10 @@ describe('startRecording with markdown view integration', () => {
     expect(global.MediaRecorder).toHaveBeenCalled();
     expect(plugin.currentRecorder).not.toBeNull();
     expect(plugin.currentRecorder.state).toBe('recording');
+
+    // stop
+    await plugin.stopRecording();
+    expect(plugin.currentRecorder).toBeNull();
   });
 
   test('recordChunk creates MediaRecorder when called with valid stream', async () => {
@@ -590,7 +594,6 @@ describe('startRecording with markdown view integration', () => {
     plugin.mediaStream = mockMediaStream;
 
     await plugin.recordChunk();
-
     expect(plugin.chunkNumber).toBe(1);
     expect(global.MediaRecorder).toHaveBeenCalled();
 
@@ -630,12 +633,9 @@ describe('startRecording with markdown view integration', () => {
         if (fn) onstopCallback = fn;
       },
     });
-
     plugin.currentRecorder = mockRecorderInstance;
 
-    // Stop recording
     await plugin.stopRecording();
-
     expect(plugin.isRecording).toBe(false);
     expect(mockRecorderInstance.stop).toHaveBeenCalled();
   });
