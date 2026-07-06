@@ -2,7 +2,7 @@ module.exports = {
   testEnvironment: 'jsdom',
   testMatch: ['<rootDir>/tests/**/*.test.js'],
   moduleNameMapper: {
-    '^obsidian$': 'obsidian-test-mocks/obsidian',
+    '^obsidian$': '<rootDir>/tests/obsidian-mock.js',
     '^@huggingface/transformers$': '<rootDir>/tests/transformers-mock.js',
   },
   setupFiles: ['obsidian-test-mocks/jest-setup'],

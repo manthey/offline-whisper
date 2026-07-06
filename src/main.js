@@ -2,8 +2,10 @@ const { Plugin, Notice, PluginSettingTab, Setting, MarkdownView, setIcon } = req
 
 let pipeline, env, DesktopTranscriber;
 
-// Conditional imports based on platform
-const isMobilePlatform = typeof process === 'undefined' || !process.versions || !process.versions.electron;
+// Allow testing to override platform detection via globalThis.__desktopOverride
+// Set to true in tests to force desktop code path
+const _platformOverride = typeof globalThis.__desktopOverride !== 'undefined' ? globalThis.__desktopOverride : undefined;
+const isMobilePlatform = _platformOverride !== undefined ? !_platformOverride : (typeof process === 'undefined' || !process.versions || !process.versions.electron);
 
 if (isMobilePlatform) {
   const transformers = require('@huggingface/transformers');
