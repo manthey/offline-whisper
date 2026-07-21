@@ -3,7 +3,7 @@
   "name": "Offline Whisper Transcription",
   "version": "1.0.0",
   "minAppVersion": "1.0.0",
-  "description": "Offline speech-to-text using Whisper",
+  "description": "Offline speech-to-text using Whisper.  Fully offline after initial download.",
   "author": "David Manthey",
   "isDesktopOnly": false
 }
