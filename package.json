@@ -12,7 +12,7 @@
     "jest-environment-jsdom": "^30.0.0",
     "nyc": "^18.0.0",
     "obsidian": "^1.7.2",
-    "obsidian-test-mocks": "^3.6.0",
+    "obsidian-test-mocks": "^3.9.0",
     "playwright": "^1.61.1",
     "prettier": "^3.9.5",
     "v8-to-istanbul": "^9.3.0"
