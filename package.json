@@ -7,7 +7,7 @@
     "tests": "node build.js --coverage && npx nyc node tests/test_desktop.js && npx jest && npx nyc --clean false -r text -r cobertura node tests/test_mobile.js"
   },
   "devDependencies": {
-    "esbuild": "^0.28.0",
+    "esbuild": "^0.28.2",
     "jest": "^30.0.0",
     "jest-environment-jsdom": "^30.0.0",
     "nyc": "^18.0.0",
