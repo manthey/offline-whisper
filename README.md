@@ -32,7 +32,6 @@ Notes that embed audio files (e.g. `![[Recording.m4a]]`, supporting `mp3, wav, m
 
 The transcript is written under a `Transcription` heading (level configurable in settings, default `##`). Transcribing an already-transcribed embed asks before replacing. The same Whisper model and regex filter settings used for live transcription are applied, and the same engines are used: whisper.cpp on desktop, transformers.js on mobile.
 
-
 ## Privacy
 
 This plugin processes all audio data locally on your device. No audio recordings or transcriptions are transmitted to external servers at any point.

@@ -21,7 +21,7 @@ must be kept intact:
 - Existing commands (toggle/start/stop transcription), the existing mic
   ribbon icon, wake lock, status notices, and all existing tests.
 
-The new feature is *additional*: transcribe an audio **file** that is embedded
+The new feature is _additional_: transcribe an audio **file** that is embedded
 in the current note (`![[recording.m4a]]`) and write the transcript directly
 beneath the embed, **using the same transcription engines** (whisper.cpp on
 desktop, transformers.js on mobile) — not an external shell command, not a new
@@ -169,4 +169,3 @@ So basically the idea is that I can speak instead of typing...
   own embed.
 - Desktop uses the downloaded whisper.cpp in the plugin folder; mobile uses
   the cached transformers.js model. No new runtime dependencies.
-
