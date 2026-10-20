@@ -18,14 +18,14 @@ function createPlugin() {
 }
 
 describe('WhisperTranscriptionPlugin', () => {
-  test('onload registers three commands, a ribbon icon, and a setting tab', async () => {
+  test('onload registers commands, ribbon icons, and a setting tab', async () => {
     const { plugin } = createPlugin();
     const addCommand = jest.spyOn(plugin, 'addCommand');
     const addRibbonIcon = jest.spyOn(plugin, 'addRibbonIcon');
     const addSettingTab = jest.spyOn(plugin, 'addSettingTab');
     await plugin.onload();
-    expect(addCommand).toHaveBeenCalledTimes(3);
-    expect(addRibbonIcon).toHaveBeenCalledTimes(1);
+    expect(addCommand).toHaveBeenCalledTimes(4);
+    expect(addRibbonIcon).toHaveBeenCalledTimes(2);
     expect(addSettingTab).toHaveBeenCalledTimes(1);
   });
 
@@ -943,5 +943,216 @@ describe('toggleRecording edge cases', () => {
     };
     const result = plugin.showStatus('test message', true);
     expect(result).toBe(undefined);
+  });
+});
+
+describe('Audio file transcription', () => {
+  function makeEditor(text) {
+    const lines = text.split('\n');
+    const offset = (pos) => {
+      let o = 0;
+      for (let i = 0; i < pos.line; i++) o += lines[i].length + 1;
+      return o + pos.ch;
+    };
+    const all = () => lines.join('\n');
+    return {
+      getValue: () => all(),
+      lineCount: () => lines.length,
+      getLine: (i) => (i >= 0 && i < lines.length ? lines[i] : ''),
+      getRange: (from, to) => all().slice(offset(from), offset(to)),
+      replaceRange: (replacement, from, to) => {
+        const updated = all().slice(0, offset(from)) + replacement + all().slice(offset(to));
+        lines.length = 0;
+        lines.push(...updated.split('\n'));
+      },
+      setLine: (i, text) => {
+        lines[i] = text;
+      },
+    };
+  }
+
+  function setupFileTranscription(noteText) {
+    const { app, plugin } = createPlugin();
+    const editor = makeEditor(noteText);
+    app.workspace.activeEditor = { editor };
+    app.workspace.getActiveFile = () => ({ path: 'note.md' });
+    app.metadataCache.getFirstLinkpathDest = (linkpath) => ({ path: 'audio/' + linkpath });
+    plugin.transcriber = jest.fn(() => Promise.resolve({ text: 'this is a test transcription' }));
+    jest.spyOn(plugin, 'loadModel').mockResolvedValue(true);
+    jest.spyOn(plugin, 'decodeAudioFile').mockResolvedValue(new Float32Array([0, 0.5, 0]));
+    return { app, plugin, editor };
+  }
+
+  function noticeSpy() {
+    return jest.spyOn(console, 'log').mockImplementation(() => {});
+  }
+  function noticed(spy, message) {
+    return spy.mock.calls.some((args) => typeof args[0] === 'string' && args[0].includes('[Notice] ' + message));
+  }
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    globalThis.__openedModals.length = 0;
+    globalThis.__shownMenus.length = 0;
+  });
+
+  test('onload registers the file-transcription command, ribbon, post processor, and context menu', async () => {
+    const { plugin } = createPlugin();
+    await plugin.onload();
+    expect(plugin.postProcessors.length).toBe(1);
+    const ctx = plugin.domEvents.find((e) => e.type === 'contextmenu');
+    expect(ctx).toBeDefined();
+    expect(plugin.embedObserver).toBeDefined();
+    plugin.onunload();
+  });
+
+  test('addTranscribeButtons adds buttons to audio embeds only, without duplicates', async () => {
+    const { plugin } = createPlugin();
+    await plugin.onload();
+    const root = document.createElement('div');
+    const audioEmbed = document.createElement('div');
+    audioEmbed.className = 'internal-embed';
+    audioEmbed.setAttribute('src', 'Recording.m4a');
+    const imageEmbed = document.createElement('div');
+    imageEmbed.className = 'internal-embed';
+    imageEmbed.setAttribute('src', 'picture.png');
+    root.appendChild(audioEmbed);
+    root.appendChild(imageEmbed);
+    plugin.addTranscribeButtons(root);
+    expect(audioEmbed.querySelectorAll('.transcribe-audio-btn').length).toBe(1);
+    expect(imageEmbed.querySelectorAll('.transcribe-audio-btn').length).toBe(0);
+    plugin.addTranscribeButtons(root);
+    expect(audioEmbed.querySelectorAll('.transcribe-audio-btn').length).toBe(1);
+  });
+
+  test('pickAudioFile lists audio embeds and choosing one transcribes it', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.onload();
+    globalThis.__openedModals.length = 0;
+    app.workspace.activeEditor = { editor: makeEditor('![[Recording.m4a]]\n\n![[pic.png]]\n\n![[Song.mp3|alias]]') };
+    const transcribeSpy = jest.spyOn(plugin, 'transcribeFile').mockImplementation(() => {});
+    plugin.pickAudioFile();
+    expect(globalThis.__openedModals.length).toBe(1);
+    const modal = globalThis.__openedModals[0];
+    expect(modal.getItems()).toEqual(['Recording.m4a', 'Song.mp3']);
+    expect(modal.getItemText('folder/Song.mp3')).toBe('Song.mp3');
+    modal.onChooseItem('Recording.m4a');
+    expect(transcribeSpy).toHaveBeenCalledWith('Recording.m4a');
+  });
+
+  test('pickAudioFile shows a notice when the note has no audio embeds', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.onload();
+    globalThis.__openedModals.length = 0;
+    app.workspace.activeEditor = { editor: makeEditor('Just text') };
+    const spy = noticeSpy();
+    plugin.pickAudioFile();
+    expect(globalThis.__openedModals.length).toBe(0);
+    expect(noticed(spy, 'No audio embeds in this note')).toBe(true);
+    spy.mockRestore();
+  });
+
+  test('right-clicking an audio embed shows a Transcribe menu item', async () => {
+    const { plugin } = createPlugin();
+    await plugin.onload();
+    const ctx = plugin.domEvents.find((e) => e.type === 'contextmenu');
+    const embed = document.createElement('div');
+    embed.className = 'internal-embed';
+    embed.setAttribute('src', 'Recording.m4a');
+    document.body.appendChild(embed);
+    const transcribeSpy = jest.spyOn(plugin, 'transcribeFile').mockImplementation(() => {});
+    const evt = { target: embed, preventDefault: jest.fn() };
+    ctx.cb(evt);
+    expect(evt.preventDefault).toHaveBeenCalled();
+    expect(globalThis.__shownMenus.length).toBe(1);
+    const menu = globalThis.__shownMenus[0];
+    expect(menu.items[0].title).toBe('Transcribe');
+    menu.items[0].handler();
+    expect(transcribeSpy).toHaveBeenCalledWith('Recording.m4a');
+    embed.remove();
+  });
+
+  test('transcribeFile inserts the transcript below the embed', async () => {
+    const { plugin, editor } = setupFileTranscription('Intro\n\n![[Recording.m4a]]\n\nOutro');
+    const spy = noticeSpy();
+    await plugin.transcribeFile('Recording.m4a');
+    expect(editor.getValue()).toBe(
+      'Intro\n\n![[Recording.m4a]]\n\n## Transcription\n\nthis is a test transcription\n\nOutro',
+    );
+    expect(noticed(spy, 'Transcribed')).toBe(true);
+    expect(plugin.decodeAudioFile).toHaveBeenCalledWith({ path: 'audio/Recording.m4a' });
+    spy.mockRestore();
+  });
+
+  test('transcribeFile uses the configured heading level', async () => {
+    const { plugin, editor } = setupFileTranscription('![[Recording.m4a]]');
+    plugin.settings.headingLevel = 3;
+    await plugin.transcribeFile('Recording.m4a');
+    expect(editor.getValue()).toContain('### Transcription');
+  });
+
+  test('transcribeFile refuses to run concurrently', async () => {
+    const { plugin } = setupFileTranscription('![[Recording.m4a]]');
+    plugin.isFileTranscribing = true;
+    const spy = noticeSpy();
+    await plugin.transcribeFile('Recording.m4a');
+    expect(plugin.transcriber).not.toHaveBeenCalled();
+    expect(noticed(spy, 'A file transcription is already running')).toBe(true);
+    spy.mockRestore();
+  });
+
+  test('transcribeFile failure leaves the note unchanged', async () => {
+    const { plugin, editor } = setupFileTranscription('![[Recording.m4a]]\n\nOutro');
+    plugin.transcriber = jest.fn(() => Promise.reject(new Error('boom')));
+    const spy = noticeSpy();
+    await plugin.transcribeFile('Recording.m4a');
+    expect(editor.getValue()).toBe('![[Recording.m4a]]\n\nOutro');
+    expect(noticed(spy, 'Transcription failed: boom')).toBe(true);
+    spy.mockRestore();
+  });
+
+  test('transcribeFile removes the placeholder when only filtered noise is transcribed', async () => {
+    const { plugin, editor } = setupFileTranscription('![[Recording.m4a]]\n\nOutro');
+    plugin.transcriber = jest.fn(() => Promise.resolve({ text: 'you' }));
+    const spy = noticeSpy();
+    await plugin.transcribeFile('Recording.m4a');
+    expect(editor.getValue()).toBe('![[Recording.m4a]]\n\nOutro');
+    spy.mockRestore();
+  });
+
+  test('transcribeFile asks before replacing an existing transcription', async () => {
+    const note = '![[Recording.m4a]]\n\n## Transcription\n\nold text\n\n# Next heading\n\nmore';
+    const { plugin, editor } = setupFileTranscription(note);
+    const spy = noticeSpy();
+
+    // Cancel leaves the note untouched.
+    globalThis.__openedModals.length = 0;
+    const cancelled = plugin.transcribeFile('Recording.m4a');
+    const cancelModal = globalThis.__openedModals[0];
+    expect(cancelModal.contentEl.querySelector('p').textContent).toBe('Replace existing transcription?');
+    cancelModal.contentEl.querySelectorAll('button')[1].click();
+    await cancelled;
+    expect(editor.getValue()).toBe(note);
+    expect(plugin.transcriber).not.toHaveBeenCalled();
+
+    // Replace swaps the old section for the new transcript.
+    globalThis.__openedModals.length = 0;
+    const replaced = plugin.transcribeFile('Recording.m4a');
+    const replaceModal = globalThis.__openedModals[0];
+    replaceModal.contentEl.querySelectorAll('button')[0].click();
+    await replaced;
+    expect(editor.getValue()).toBe(
+      '![[Recording.m4a]]\n\n## Transcription\n\nthis is a test transcription\n# Next heading\n\nmore',
+    );
+    spy.mockRestore();
+  });
+
+  test('transcribeFile notices when the file cannot be resolved', async () => {
+    const { app, plugin } = setupFileTranscription('![[Recording.m4a]]');
+    app.metadataCache.getFirstLinkpathDest = () => null;
+    const spy = noticeSpy();
+    await plugin.transcribeFile('Recording.m4a');
+    expect(noticed(spy, 'File not found: Recording.m4a')).toBe(true);
+    spy.mockRestore();
   });
 });

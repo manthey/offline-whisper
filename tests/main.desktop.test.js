@@ -69,8 +69,8 @@ describe('WhisperTranscriptionPlugin Desktop Path', () => {
 
     await plugin.onload();
 
-    expect(plugin.addCommand).toHaveBeenCalledTimes(3);
-    expect(plugin.addRibbonIcon).toHaveBeenCalledTimes(1);
+    expect(plugin.addCommand).toHaveBeenCalledTimes(4);
+    expect(plugin.addRibbonIcon).toHaveBeenCalledTimes(2);
     expect(plugin.addSettingTab).toHaveBeenCalledTimes(1);
   });
 });

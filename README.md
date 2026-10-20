@@ -22,6 +22,17 @@ Navigate to the plugin settings to select a model. Models are downloaded from Hu
 
 In any note, select the ribbon icon or the command palette 'Toggle Voice Transcription' command to start transcribing. Select it again to stop. The audio is not saved except briefly on desktop platforms to perform the transcription.
 
+## Transcribing audio files embedded in a note
+
+Notes that embed audio files (e.g. `![[Recording.m4a]]`, supporting `mp3, wav, m4a, ogg, 3gp, flac, webm`) can have those files transcribed directly, with the transcript inserted below the embed:
+
+- Click the **Transcribe** button next to the embedded audio player (Live Preview and Reading view).
+- Right-click the embedded audio player and choose **Transcribe**.
+- Run the command **Transcribe audio in this note**, or click the audio-file ribbon icon in the sidebar, and pick a file from the list of audio files linked in the current note.
+
+The transcript is written under a `Transcription` heading (level configurable in settings, default `##`). Transcribing an already-transcribed embed asks before replacing. The same Whisper model and regex filter settings used for live transcription are applied, and the same engines are used: whisper.cpp on desktop, transformers.js on mobile.
+
+
 ## Privacy
 
 This plugin processes all audio data locally on your device. No audio recordings or transcriptions are transmitted to external servers at any point.

@@ -1,4 +1,21 @@
 window.obsidianMock = (function () {
+  // Give a JSDOM element the createEl/createDiv helpers Obsidian augments HTMLElements with.
+  function enhanceElement(el) {
+    el.createEl = (tag, attrs) => {
+      const child = document.createElement(tag);
+      if (attrs && attrs.text !== undefined) child.textContent = attrs.text;
+      if (attrs && attrs.cls) child.className = attrs.cls;
+      el.appendChild(child);
+      return child;
+    };
+    el.createDiv = (attrs) => el.createEl('div', attrs);
+    el.empty = () => {
+      el.innerHTML = '';
+    };
+    return el;
+  }
+  globalThis.__openedModals = globalThis.__openedModals || [];
+  globalThis.__shownMenus = globalThis.__shownMenus || [];
   class Plugin {
     constructor(app, manifest) {
       this.app = app;
@@ -9,6 +26,14 @@ window.obsidianMock = (function () {
       return document.createElement('div');
     }
     addSettingTab() {}
+    registerMarkdownPostProcessor(cb) {
+      this.postProcessors = this.postProcessors || [];
+      this.postProcessors.push(cb);
+    }
+    registerDomEvent(el, type, cb) {
+      this.domEvents = this.domEvents || [];
+      this.domEvents.push({ el, type, cb });
+    }
     async loadData() {
       return {};
     }
@@ -115,7 +140,68 @@ window.obsidianMock = (function () {
   class MarkdownView {}
   function setIcon() {}
 
-  return { Plugin, Notice, PluginSettingTab, Setting, MarkdownView, setIcon };
+  class Modal {
+    constructor(app) {
+      this.app = app;
+      this.contentEl = enhanceElement(document.createElement('div'));
+    }
+    open() {
+      globalThis.__openedModals.push(this);
+    }
+    close() {
+      if (this.onClose) {
+        this.onClose();
+      }
+    }
+  }
+
+  class Menu {
+    constructor() {
+      this.items = [];
+    }
+    addItem(cb) {
+      const item = {
+        setTitle(title) {
+          item.title = title;
+          return item;
+        },
+        setIcon(icon) {
+          item.icon = icon;
+          return item;
+        },
+        onClick(fn) {
+          item.handler = fn;
+          return item;
+        },
+      };
+      this.items.push(item);
+      cb(item);
+      return this;
+    }
+    showAtMouseEvent() {
+      globalThis.__shownMenus.push(this);
+      return this;
+    }
+  }
+
+  class FuzzySuggestModal {
+    constructor(app) {
+      this.app = app;
+    }
+    open() {
+      globalThis.__openedModals.push(this);
+    }
+    close() {}
+    getItems() {
+      return [];
+    }
+    getItemText(item) {
+      return String(item);
+    }
+    onChooseItem() {}
+  }
+
+  return { Plugin, Notice, PluginSettingTab, Setting, MarkdownView, setIcon, Modal, Menu, FuzzySuggestModal };
 })();
 
 module.exports = window.obsidianMock;

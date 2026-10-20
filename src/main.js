@@ -1,4 +1,12 @@
-const { Plugin, Notice, PluginSettingTab, Setting, MarkdownView, setIcon } = require('obsidian');
+const { Plugin, Notice, PluginSettingTab, Setting, MarkdownView, setIcon, Menu, Modal, FuzzySuggestModal } = require('obsidian');
+
+const AUDIO_EXTENSIONS = ['mp3', 'wav', 'm4a', 'ogg', '3gp', 'flac', 'webm'];
+const TRANSCRIBE_PLACEHOLDER = '_Transcribing..._';
+
+function isAudioEmbed(linkpath) {
+  const ext = linkpath.split('.').pop().toLowerCase();
+  return AUDIO_EXTENSIONS.includes(ext);
+}
 
 let pipeline, env, DesktopTranscriber;
 
@@ -58,10 +66,12 @@ class WhisperTranscriptionPlugin extends Plugin {
     modelId: 'onnx-community/whisper-base.en',
     chunkDurationMs: 10000,
     regexFilter: this.defaultFilter,
+    headingLevel: 2,
   };
   transcriber = null;
   desktopTranscriber = null;
   isRecording = false;
+  isFileTranscribing = false;
   isModelLoading = false;
   mediaStream = null;
   currentRecorder = null;
@@ -100,6 +110,31 @@ class WhisperTranscriptionPlugin extends Plugin {
       this.toggleRecording();
     });
     this.addSettingTab(new WhisperSettingTab(this.app, this));
+
+    // File transcription: command palette + sidebar icon open the file picker.
+    this.addCommand({
+      id: 'transcribe-audio-in-note',
+      name: 'Transcribe audio in this note',
+      callback: () => this.pickAudioFile(),
+    });
+    this.addRibbonIcon('file-audio', 'Transcribe audio in this note', () => this.pickAudioFile());
+
+    // Inline Transcribe buttons: post processor for Reading view,
+    // MutationObserver for Live Preview (post processor does not run there).
+    this.registerMarkdownPostProcessor((el) => this.addTranscribeButtons(el));
+    this.embedObserver = new MutationObserver(() => this.addTranscribeButtons(document.body));
+    this.embedObserver.observe(document.body, { childList: true, subtree: true });
+
+    // Right-click menu on audio embeds (the player's native menu cannot be extended).
+    this.registerDomEvent(document, 'contextmenu', (evt) => {
+      const embed = evt.target && evt.target.closest ? evt.target.closest('.internal-embed') : null;
+      const src = embed ? embed.getAttribute('src') : null;
+      if (src && isAudioEmbed(src)) {
+        evt.preventDefault();
+        new Menu().addItem((item) => item.setTitle('Transcribe').setIcon('mic').onClick(() => this.transcribeFile(src))).showAtMouseEvent(evt);
+      }
+    });
+
     log('Plugin loaded');
   }
 
@@ -381,6 +416,179 @@ class WhisperTranscriptionPlugin extends Plugin {
     return result;
   }
 
+  addTranscribeButtons(root) {
+    if (!root || !root.querySelectorAll) {
+      return;
+    }
+    root.querySelectorAll('.internal-embed').forEach((embed) => {
+      const src = embed.getAttribute('src');
+      if (!src || !isAudioEmbed(src) || embed.querySelector('.transcribe-audio-btn')) {
+        return;
+      }
+      const btn = document.createElement('button');
+      btn.textContent = 'Transcribe';
+      btn.className = 'transcribe-audio-btn';
+      btn.addEventListener('click', (evt) => {
+        evt.preventDefault();
+        evt.stopPropagation();
+        this.transcribeFile(src);
+      });
+      embed.appendChild(btn);
+      log('Added transcribe button for: ' + src);
+    });
+  }
+
+  pickAudioFile() {
+    const editor = this.app.workspace.activeEditor ? this.app.workspace.activeEditor.editor : null;
+    if (!editor) {
+      new Notice('No active note');
+      return;
+    }
+    const regex = new RegExp('\\!\\[\\[([^\\]\\|]+\\.(?:' + AUDIO_EXTENSIONS.join('|') + '))(?:\\|[^\\]]*)?\\]\\]', 'gi');
+    const links = [];
+    let match;
+    while ((match = regex.exec(editor.getValue())) !== null) {
+      links.push(match[1]);
+    }
+    if (!links.length) {
+      new Notice('No audio embeds in this note');
+      return;
+    }
+    new AudioSuggestModal(this.app, links, (link) => this.transcribeFile(link)).open();
+  }
+
+  async decodeAudioFile(file) {
+    log('Reading audio file: ' + file.path);
+    const arrayBuffer = await this.app.vault.adapter.readBinary(file.path);
+    log('Audio file size: ' + arrayBuffer.byteLength);
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    log('Decoded audio file', { sampleRate: audioBuffer.sampleRate, duration: audioBuffer.duration });
+    let audioData = audioBuffer.getChannelData(0);
+    if (audioBuffer.sampleRate !== 16000) {
+      log('Resampling from ' + audioBuffer.sampleRate + ' to 16000');
+      audioData = this.resampleAudio(audioData, audioBuffer.sampleRate, 16000);
+    }
+    for (let i = 0; i < audioData.length; i++) {
+      if (audioData[i] > 1) audioData[i] = 1;
+      if (audioData[i] < -1) audioData[i] = -1;
+    }
+    return audioData;
+  }
+
+  async transcribeFile(linkpath) {
+    if (this.isFileTranscribing) {
+      new Notice('A file transcription is already running');
+      return;
+    }
+    const activeFile = this.app.workspace.getActiveFile();
+    const editor = this.app.workspace.activeEditor ? this.app.workspace.activeEditor.editor : null;
+    if (!activeFile || !editor) {
+      new Notice('No active note');
+      return;
+    }
+    const file = this.app.metadataCache.getFirstLinkpathDest(linkpath, activeFile.path);
+    if (!file) {
+      new Notice('File not found: ' + linkpath);
+      return;
+    }
+    let embedLine = -1;
+    for (let i = 0; i < editor.lineCount(); i++) {
+      if (editor.getLine(i).includes('![[' + linkpath)) {
+        embedLine = i;
+        break;
+      }
+    }
+    if (embedLine === -1) {
+      new Notice('Embed not found in the active note');
+      return;
+    }
+
+    // Existing transcript check: first non-blank line after the embed.
+    let sectionEnd = embedLine;
+    let next = embedLine + 1;
+    while (next < editor.lineCount() && !editor.getLine(next).trim()) {
+      next++;
+    }
+    if (next < editor.lineCount() && /^#+ Transcription\s*$/.test(editor.getLine(next))) {
+      log('Existing transcription found at line ' + next);
+      if (!(await confirmReplaceTranscription(this.app))) {
+        return;
+      }
+      sectionEnd = next;
+      while (sectionEnd + 1 < editor.lineCount() && !/^#/.test(editor.getLine(sectionEnd + 1))) {
+        sectionEnd++;
+      }
+    }
+
+    const heading = '#'.repeat(this.settings.headingLevel) + ' Transcription';
+    const placeholder = '\n\n' + heading + '\n\n' + TRANSCRIBE_PLACEHOLDER;
+    const from = { line: embedLine, ch: editor.getLine(embedLine).length };
+    const to = { line: sectionEnd, ch: editor.getLine(sectionEnd).length };
+    const oldText = editor.getRange(from, to);
+    editor.replaceRange(placeholder, from, to);
+    log('Inserted placeholder for: ' + linkpath);
+
+    this.isFileTranscribing = true;
+    try {
+      if (!(await this.loadModel())) {
+        throw new Error('Model not available');
+      }
+      const audioData = await this.decodeAudioFile(file);
+      const result = await this.transcriber(audioData);
+      const text = result.text ? result.text.trim() : '';
+      // Re-locate the placeholder; the note may have been edited meanwhile.
+      const placeholderLine = this.findPlaceholderLine(editor);
+      if (placeholderLine === -1) {
+        throw new Error('Placeholder removed from note');
+      }
+      if (text && !this.getFilterRegex().test(text)) {
+        editor.setLine(placeholderLine, text);
+        new Notice('Transcribed');
+      } else {
+        this.removePlaceholderSection(editor, placeholderLine, oldText);
+        new Notice('No speech detected in ' + linkpath);
+      }
+    } catch (error) {
+      log('File transcription FAILED', error);
+      const placeholderLine = this.findPlaceholderLine(editor);
+      if (placeholderLine !== -1) {
+        this.removePlaceholderSection(editor, placeholderLine, oldText);
+      }
+      new Notice('Transcription failed: ' + error.message);
+    } finally {
+      this.isFileTranscribing = false;
+    }
+  }
+
+  getFilterRegex() {
+    if (this.settings.regexFilter) {
+      try {
+        return new RegExp(this.settings.regexFilter);
+      } catch (e) {}
+    }
+    return new RegExp(this.defaultFilter);
+  }
+
+  findPlaceholderLine(editor) {
+    for (let i = 0; i < editor.lineCount(); i++) {
+      if (editor.getLine(i).includes(TRANSCRIBE_PLACEHOLDER)) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  removePlaceholderSection(editor, placeholderLine, oldText) {
+    // Placeholder block: embed line, blank, heading, blank, placeholder.
+    if (placeholderLine >= 4) {
+      const endOfEmbed = { line: placeholderLine - 4, ch: editor.getLine(placeholderLine - 4).length };
+      editor.replaceRange(oldText, endOfEmbed, { line: placeholderLine, ch: editor.getLine(placeholderLine).length });
+    } else {
+      editor.setLine(placeholderLine, '');
+    }
+  }
+
   async transcribeAudio(audioBlob, chunkNum) {
     if (!this.transcriber) {
       log(`Chunk #${chunkNum} no transcriber available`);
@@ -497,8 +705,53 @@ class WhisperTranscriptionPlugin extends Plugin {
     log('Plugin unloading');
     this.stopRecording();
     this.transcriber = null;
+    if (this.embedObserver) {
+      this.embedObserver.disconnect();
+    }
   }
 }
+
+function confirmReplaceTranscription(app) {
+  return new Promise((resolve) => {
+    const modal = new Modal(app);
+    let resolved = false;
+    const finish = (value) => {
+      resolved = true;
+      resolve(value);
+      modal.close();
+    };
+    modal.contentEl.createEl('p', { text: 'Replace existing transcription?' });
+    const row = modal.contentEl.createDiv({ cls: 'transcribe-modal-buttons' });
+    const replaceBtn = row.createEl('button', { text: 'Replace' });
+    replaceBtn.addEventListener('click', () => finish(true));
+    const cancelBtn = row.createEl('button', { text: 'Cancel' });
+    cancelBtn.addEventListener('click', () => finish(false));
+    modal.onClose = () => {
+      if (!resolved) {
+        resolve(false);
+      }
+    };
+    modal.open();
+  });
+}
+
+class AudioSuggestModal extends FuzzySuggestModal {
+  constructor(app, links, onPick) {
+    super(app);
+    this.links = links;
+    this.onPick = onPick;
+  }
+  getItems() {
+    return this.links;
+  }
+  getItemText(link) {
+    return link.split('/').pop();
+  }
+  onChooseItem(link) {
+    this.onPick(link);
+  }
+}
+
 
 class WhisperSettingTab extends PluginSettingTab {
   constructor(app, plugin) {
@@ -544,6 +797,23 @@ class WhisperSettingTab extends PluginSettingTab {
             } else {
               new Notice('Model changed (already cached).');
             }
+          })
+      );
+    new Setting(containerEl)
+      .setName('Transcript heading level')
+      .setDesc('Number of # characters in the heading written above each audio file transcript (1-6).')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption('1', '1')
+          .addOption('2', '2')
+          .addOption('3', '3')
+          .addOption('4', '4')
+          .addOption('5', '5')
+          .addOption('6', '6')
+          .setValue(String(this.plugin.settings.headingLevel))
+          .onChange(async (value) => {
+            this.plugin.settings.headingLevel = parseInt(value, 10);
+            await this.plugin.saveSettings();
           })
       );
     new Setting(containerEl)

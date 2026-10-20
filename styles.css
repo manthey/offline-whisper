@@ -1,0 +1,15 @@
+/* Inline Transcribe button on embedded audio files */
+.internal-embed .transcribe-audio-btn {
+  display: block;
+  margin-top: 4px;
+  padding: 2px 10px;
+  font-size: var(--font-ui-smaller);
+  cursor: pointer;
+}
+
+/* Replace/Cancel buttons in the replace-transcription modal */
+.transcribe-modal-buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
