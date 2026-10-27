@@ -18,6 +18,6 @@
     "v8-to-istanbul": "^9.3.0"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.8.1"
+    "@huggingface/transformers": "^4.2.0"
   }
 }
