@@ -189,39 +189,84 @@ function listDirRecursive(dir, prefix = '') {
 async function getLatestReleaseUrl(archivePattern, repo) {
   const { https } = getNodeModules();
   log('Fetching latest whisper.cpp release info');
-  const response = await new Promise((resolve, reject) => {
-    const makeRequest = (requestUrl) => {
-      https
-        .get(
-          requestUrl,
-          {
-            headers: { 'User-Agent': 'ObsidianWhisperPlugin' },
-          },
-          (res) => {
-            if (res.statusCode === 302 || res.statusCode === 301) {
-              makeRequest(res.headers.location);
-              return;
-            }
-            let data = '';
-            res.on('data', (chunk) => (data += chunk));
-            res.on('end', () => resolve({ status: res.statusCode, data }));
-          },
-        )
-        .on('error', reject);
-    };
-    makeRequest(repo);
-  });
-  if (response.status !== 200) {
-    throw new Error(`GitHub API returned ${response.status}`);
+  const baseUrl = repo.replace(/\/latest$/, '');
+  const fetchJson = (url) =>
+    new Promise((resolve, reject) => {
+      const makeRequest = (requestUrl) => {
+        https
+          .get(
+            requestUrl,
+            {
+              headers: { 'User-Agent': 'ObsidianWhisperPlugin' },
+            },
+            (res) => {
+              if (res.statusCode === 302 || res.statusCode === 301) {
+                makeRequest(res.headers.location);
+                return;
+              }
+              let data = '';
+              res.on('data', (chunk) => (data += chunk));
+              res.on('end', () => resolve({ status: res.statusCode, data }));
+            },
+          )
+          .on('error', reject);
+      };
+      makeRequest(url);
+    });
+  const findAsset = (releaseInfo) => releaseInfo.assets.find((a) => a.name === archivePattern);
+  const pick = (releaseInfo) => {
+    if (releaseInfo.prerelease) {
+      log('No stable release contains ' + archivePattern + '; using prerelease ' + releaseInfo.tag_name);
+    }
+    log('Latest release with ' + archivePattern + ': ' + releaseInfo.tag_name);
+    return findAsset(releaseInfo).browser_download_url;
+  };
+  // whisper.cpp scheme: the version release announces the version, but the
+  // binaries are attached to an associated "Nightly build" tag named in the
+  // release notes. Resolve that link so the binary matches the release.
+  const latestResponse = await fetchJson(repo);
+  if (latestResponse.status !== 200) {
+    throw new Error(`GitHub API returned ${latestResponse.status}`);
   }
-  const releaseInfo = JSON.parse(response.data);
-  log('Latest release: ' + releaseInfo.tag_name);
-  const asset = releaseInfo.assets.find((a) => a.name === archivePattern);
-  if (!asset) {
-    const availableAssets = releaseInfo.assets.map((a) => a.name).join(', ');
-    throw new Error(`Could not find ${archivePattern} in release. Available: ${availableAssets}`);
+  const latest = JSON.parse(latestResponse.data);
+  if (findAsset(latest)) {
+    return pick(latest);
   }
-  return asset.browser_download_url;
+  const nightlyMatch = (latest.body || '').match(
+    /\*\*Nightly build:\*\* \[[^\]]*\]\([^)]*\/releases\/tag\/([^)\s]+)\)/,
+  );
+  if (nightlyMatch) {
+    log('Release ' + latest.tag_name + ' points to nightly build ' + nightlyMatch[1]);
+    const nightlyResponse = await fetchJson(baseUrl + '/tags/' + nightlyMatch[1]);
+    if (nightlyResponse.status !== 200) {
+      throw new Error(`GitHub API returned ${nightlyResponse.status}`);
+    }
+    const nightly = JSON.parse(nightlyResponse.data);
+    if (findAsset(nightly)) {
+      return pick(nightly);
+    }
+  }
+  // Fall back to scanning recent releases: newest stable release with the
+  // wanted asset, then any release with it — a prerelease binary beats a
+  // failed download.
+  const listResponse = await fetchJson(baseUrl + '?per_page=50');
+  if (listResponse.status !== 200) {
+    throw new Error(`GitHub API returned ${listResponse.status}`);
+  }
+  const releases = JSON.parse(listResponse.data);
+  const findAssetRelease = (stableOnly) =>
+    releases.find((releaseInfo) => (stableOnly ? !releaseInfo.prerelease : true) && findAsset(releaseInfo));
+  const releaseInfo = findAssetRelease(true) || findAssetRelease(false);
+  if (releaseInfo) {
+    return pick(releaseInfo);
+  }
+  const searched = releases.map((r) => r.tag_name).join(', ');
+  throw new Error(
+    `Could not find ${archivePattern} in ${releases.length} recent releases (${searched})` +
+      `. Newest release assets: ${
+        releases.length ? releases[0].assets.map((a) => a.name).join(', ') : '(no releases)'
+      }`,
+  );
 }
 
 function writeWavFile(filePath, audioData, sampleRate) {
