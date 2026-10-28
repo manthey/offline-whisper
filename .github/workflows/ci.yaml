@@ -3,6 +3,10 @@ name: Test Obsidian Plugin
 on:
   push:
   pull_request:
+  schedule:
+    # Weekly check that the plugin's download links still resolve and that
+    # binaries and models still download and transcribe on all platforms.
+    - cron: '30 5 * * 1'
 
 permissions:
   contents: write

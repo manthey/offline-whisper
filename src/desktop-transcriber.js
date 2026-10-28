@@ -40,7 +40,7 @@ function getPlatformInfo() {
   if (platform === 'win32') {
     execNames = ['whisper-cli.exe'];
     archivePattern = 'whisper-blas-bin-x64.zip';
-    repo = 'https://api.github.com/repos/ggerganov/whisper.cpp/releases/latest';
+    repo = 'https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest';
   } else if (platform === 'darwin') {
     repo = 'https://api.github.com/repos/bizenlabs/whisper-cpp-macos-bin/releases/latest';
     archivePattern =

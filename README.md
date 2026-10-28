@@ -30,7 +30,7 @@ This plugin processes all audio data locally on your device. No audio recordings
 
 On the desktop, this plugin will install an executable from one of these locations:
 
-- https://github.com/ggerganov/whisper.cpp/releases/latest
+- https://github.com/ggml-org/whisper.cpp/releases/latest
 
 - https://github.com/bizenlabs/whisper-cpp-macos-bin/releases/latest
 
