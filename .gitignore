@@ -2,3 +2,4 @@ main.js
 node_modules
 .nyc_output
 coverage
+patch.txt

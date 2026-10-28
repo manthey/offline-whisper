@@ -2,6 +2,8 @@ const { Plugin, Notice, PluginSettingTab, Setting, MarkdownView, setIcon } = req
 
 let pipeline, env, DesktopTranscriber;
 
+const { AudioSegmenter } = require('./audio-segmenter.js');
+
 // Allow testing to override platform detection via globalThis.__desktopOverride
 // Set to true in tests to force desktop code path
 const _platformOverride = typeof globalThis.__desktopOverride !== 'undefined' ? globalThis.__desktopOverride : undefined;
@@ -26,6 +28,22 @@ function log(message, data) {
     console.log(`[Whisper ${timestamp}] ${message}`);
   }
 }
+
+// Audio worklet that forwards input samples to the main thread. Loaded from a
+// blob URL so no extra files are needed. ScriptProcessorNode is used as a
+// fallback where AudioWorklet is unavailable.
+const CAPTURE_WORKLET_SOURCE = `
+class OfflineWhisperCapture extends AudioWorkletProcessor {
+  process(inputs) {
+    const channel = inputs && inputs[0] && inputs[0][0];
+    if (channel && channel.length > 0) {
+      this.port.postMessage(channel.slice(0));
+    }
+    return true;
+  }
+}
+registerProcessor('offline-whisper-capture', OfflineWhisperCapture);
+`;
 
 async function isModelCached(modelId) {
   try {
@@ -65,6 +83,16 @@ class WhisperTranscriptionPlugin extends Plugin {
   isModelLoading = false;
   mediaStream = null;
   currentRecorder = null;
+  audioContext = null;
+  audioSourceNode = null;
+  audioProcessor = null;
+  audioMuteGain = null;
+  captureActive = false;
+  captureSampleRate = 16000;
+  segmenter = null;
+  transcriptionChain = Promise.resolve();
+  pendingInput = [];
+  pendingInputLength = 0;
   targetEditor = null;
   statusNotice = null;
   processingCount = 0;
@@ -282,11 +310,13 @@ class WhisperTranscriptionPlugin extends Plugin {
       await this.acquireWakeLock();
 	  setIcon(this.ribbonIcon, 'mic');
       this.isRecording = true;
-      this.chunkNumber = 0;
-      this.nextInsertChunk = 1;
-      this.pendingResults = new Map();
       this.showStatus('Recording started', 2000);
-      this.recordChunk();
+      try {
+        await this.startContinuousCapture();
+      } catch (error) {
+        log('Continuous capture unavailable, falling back to chunked recorder', error);
+        this.recordChunk();
+      }
     } catch (error) {
       log('Microphone access FAILED', error);
       new Notice('Microphone access failed: ' + error.message);
@@ -371,6 +401,224 @@ class WhisperTranscriptionPlugin extends Plugin {
     }, this.settings.chunkDurationMs);
   }
 
+  async startContinuousCapture() {
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor) {
+      throw new Error('AudioContext is not available');
+    }
+    const context = new AudioContextCtor({ sampleRate: 16000 });
+    const sampleRate = context.sampleRate || 16000;
+    if (!context.createMediaStreamSource || !context.createGain) {
+      throw new Error('Continuous audio capture is not supported');
+    }
+    const source = context.createMediaStreamSource(this.mediaStream);
+    // Keep the capture node connected through a silent gain node: some
+    // browsers only pump audio through nodes that reach the destination.
+    const mute = context.createGain();
+    mute.gain.value = 0;
+    let node = null;
+    if (context.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
+      try {
+        const workletUrl = URL.createObjectURL(new Blob([CAPTURE_WORKLET_SOURCE], { type: 'application/javascript' }));
+        await context.audioWorklet.addModule(workletUrl);
+        URL.revokeObjectURL(workletUrl);
+        node = new AudioWorkletNode(context, 'offline-whisper-capture');
+        node.port.onmessage = (event) => {
+          try {
+            this.queueAudioInput(event.data);
+          } catch (error) {
+            log('Audio processing error', error);
+          }
+        };
+        log('Capturing with AudioWorkletNode');
+      } catch (error) {
+        log('AudioWorklet unavailable, falling back to ScriptProcessorNode', error);
+        node = null;
+      }
+    }
+    if (!node) {
+      if (!context.createScriptProcessor) {
+        throw new Error('No audio capture node available');
+      }
+      node = context.createScriptProcessor(4096, 1, 1);
+      node.onaudioprocess = (event) => {
+        try {
+          this.queueAudioInput(event.inputBuffer.getChannelData(0));
+        } catch (error) {
+          log('Audio processing error', error);
+        }
+      };
+      log('Capturing with ScriptProcessorNode');
+    }
+    source.connect(node);
+    node.connect(mute);
+    mute.connect(context.destination);
+    this.segmenter = new AudioSegmenter({
+      sampleRate,
+      minDurationMs: this.settings.chunkDurationMs,
+      maxDurationMs: this.settings.chunkDurationMs + 2500,
+    });
+    this.pendingInput = [];
+    this.pendingInputLength = 0;
+    this.audioContext = context;
+    this.audioSourceNode = source;
+    this.audioProcessor = node;
+    this.audioMuteGain = mute;
+    this.captureActive = true;
+    this.captureSampleRate = sampleRate;
+    log(`Continuous capture started at ${sampleRate}Hz`);
+  }
+
+  teardownContinuousCapture() {
+    if (this.audioProcessor) {
+      this.audioProcessor.onaudioprocess = null;
+      try {
+        this.audioProcessor.disconnect();
+      } catch (error) {
+      }
+      this.audioProcessor = null;
+    }
+    if (this.audioSourceNode) {
+      try {
+        this.audioSourceNode.disconnect();
+      } catch (error) {
+      }
+      this.audioSourceNode = null;
+    }
+    if (this.audioMuteGain) {
+      try {
+        this.audioMuteGain.disconnect();
+      } catch (error) {
+      }
+      this.audioMuteGain = null;
+    }
+    if (this.audioContext) {
+      const context = this.audioContext;
+      this.audioContext = null;
+      try {
+        context.close();
+      } catch (error) {
+      }
+    }
+    this.captureActive = false;
+  }
+
+  // AudioWorkletNode delivers samples in small 128-sample messages, so
+  // incoming audio is accumulated and handed to the segmenter in larger
+  // batches to keep buffer copying cheap.
+  queueAudioInput(samples) {
+    if (!this.isRecording || !this.segmenter) {
+      return;
+    }
+    this.pendingInput.push(samples);
+    this.pendingInputLength += samples.length;
+    if (this.pendingInputLength >= 4096) {
+      this.drainPendingInput();
+    }
+  }
+
+  drainPendingInput() {
+    if (this.pendingInputLength === 0) {
+      return;
+    }
+    const merged = new Float32Array(this.pendingInputLength);
+    let offset = 0;
+    for (const part of this.pendingInput) {
+      merged.set(part, offset);
+      offset += part.length;
+    }
+    this.pendingInput = [];
+    this.pendingInputLength = 0;
+    this.handleAudioInput(merged);
+  }
+
+  handleAudioInput(samples) {
+    if (!this.isRecording || !this.segmenter) {
+      return;
+    }
+    const segments = this.segmenter.push(samples);
+    for (const segment of segments) {
+      this.transcribeSegment(segment);
+    }
+  }
+
+  transcribeSegment(audioData) {
+    this.chunkNumber++;
+    const chunkNum = this.chunkNumber;
+    let prepared = audioData;
+    if (this.captureSampleRate !== 16000) {
+      log(`Chunk #${chunkNum} resampling from ${this.captureSampleRate} to 16000`);
+      prepared = this.resampleAudio(prepared, this.captureSampleRate, 16000);
+    }
+    log(`Chunk #${chunkNum} segment ready: ${prepared.length} samples (${(prepared.length / 16000).toFixed(2)}s)`);
+    // Transcribe one chunk at a time, in order, so results are inserted in
+    // the order the audio was spoken, even across stop/start cycles and
+    // regardless of how long each transcription takes.
+    const task = () => this.transcribeAudioData(prepared, chunkNum);
+    this.transcriptionChain = this.transcriptionChain.then(task, task);
+  }
+
+  async transcribeAudioData(audioData, chunkNum) {
+    if (!this.transcriber || !this.targetEditor) {
+      log(`Chunk #${chunkNum} no transcriber or editor available`);
+      // Queue an empty result so chunk ordering cannot stall on this chunk.
+      this.queueTranscriptionResult('', chunkNum);
+      return;
+    }
+    this.processingCount++;
+    log(`Chunk #${chunkNum} starting transcription, queue size: ${this.processingCount}`);
+    if (this.processingCount === 1 && this.isRecording) {
+      this.showStatus('Processing speech');
+    }
+    let text = '';
+    try {
+      // Clamp audio to valid range [-1, 1]
+      const clamped = new Float32Array(audioData.length);
+      for (let i = 0; i < audioData.length; i++) {
+        clamped[i] = Math.max(-1, Math.min(1, audioData[i]));
+      }
+      text = await this.transcribePreparedAudio(clamped, chunkNum);
+    } catch (error) {
+      log(`Chunk #${chunkNum} transcription FAILED`, error);
+      new Notice('Transcription error: ' + error.message);
+    } finally {
+      this.processingCount--;
+      log(`Chunk #${chunkNum} done, remaining in queue: ${this.processingCount}`);
+      if (this.processingCount === 0 && this.isRecording) {
+        this.showStatus('Listening', 2000);
+      }
+    }
+    // Always queue a result (empty on failure) so chunk ordering cannot
+    // stall waiting for a chunk that will never produce text.
+    this.queueTranscriptionResult(text, chunkNum);
+  }
+
+  async transcribePreparedAudio(audioData, chunkNum) {
+    log(`Chunk #${chunkNum} calling transcriber`);
+    const startTime = Date.now();
+    let timeoutHandle = null;
+    const result = await Promise.race([
+      this.transcriber(audioData),
+      new Promise((resolve) => {
+        timeoutHandle = setTimeout(() => resolve(null), 180000);
+      }),
+    ]);
+    if (timeoutHandle !== null) {
+      clearTimeout(timeoutHandle);
+    }
+    const elapsed = Date.now() - startTime;
+    log(`Chunk #${chunkNum} transcription complete in ${elapsed}ms`, result);
+    const text = result && result.text ? result.text.trim() : '';
+    log(`Chunk #${chunkNum} extracted text: "${text}"`);
+    return text;
+  }
+
+  queueTranscriptionResult(text, chunkNum) {
+    log(`Chunk #${chunkNum} queueing text: "${text}"`);
+    this.pendingResults.set(chunkNum, text);
+    this.flushPendingResults();
+  }
+
   resampleAudio(audioData, fromSampleRate, toSampleRate) {
     const ratio = fromSampleRate / toSampleRate;
     const newLength = Math.round(audioData.length / ratio);
@@ -420,18 +668,14 @@ class WhisperTranscriptionPlugin extends Plugin {
         if (audioData[i] < -1) audioData[i] = -1;
       }
       log(`Chunk #${chunkNum} audio ready: ${audioData.length} samples (${(audioData.length / 16000).toFixed(2)}s)`);
-      log(`Chunk #${chunkNum} calling transcriber`);
-      const startTime = Date.now();
-      const result = await this.transcriber(audioData);
-      const elapsed = Date.now() - startTime;
-      log(`Chunk #${chunkNum} transcription complete in ${elapsed}ms`, result);
-      const text = result.text ? result.text.trim() : '';
-      log(`Chunk #${chunkNum} extracted text: "${text}"`);
-      this.pendingResults.set(chunkNum, text);
-      this.flushPendingResults();
+      const text = await this.transcribePreparedAudio(audioData, chunkNum);
+      this.queueTranscriptionResult(text, chunkNum);
     } catch (error) {
       log(`Chunk #${chunkNum} transcription FAILED`, error);
       new Notice('Transcription error: ' + error.message);
+      // Queue an empty result so chunk ordering cannot stall on this chunk.
+      this.pendingResults.set(chunkNum, '');
+      this.flushPendingResults();
     } finally {
       this.processingCount--;
       log(`Chunk #${chunkNum} done, remaining in queue: ${this.processingCount}`);
@@ -479,6 +723,8 @@ class WhisperTranscriptionPlugin extends Plugin {
     log('Stopping recording');
 	setIcon(this.ribbonIcon, 'mic-off');
     this.releaseWakeLock();
+    const wasCapturing = this.captureActive;
+    this.teardownContinuousCapture();
     if (!this.isRecording) {
       log('Was not recording');
       return;
@@ -490,6 +736,22 @@ class WhisperTranscriptionPlugin extends Plugin {
       this.currentRecorder.stop();
     }
     this.currentRecorder = null;
+    if (wasCapturing) {
+      // Hand any remaining captured audio to the segmenter, then transcribe
+      // whatever is still buffered when recording ends.
+      this.drainPendingInput();
+      if (this.segmenter) {
+        const remaining = this.segmenter.flush();
+        this.segmenter = null;
+        for (const segment of remaining) {
+          this.transcribeSegment(segment);
+        }
+      }
+      if (this.mediaStream) {
+        this.mediaStream.getTracks().forEach((track) => track.stop());
+        this.mediaStream = null;
+      }
+    }
     new Notice('Recording stopping');
   }
 
@@ -548,7 +810,9 @@ class WhisperSettingTab extends PluginSettingTab {
       );
     new Setting(containerEl)
       .setName('Chunk duration (seconds)')
-      .setDesc('How often transcription runs. 10-15s recommended.')
+      .setDesc(
+        'Target chunk length. A chunk is transcribed at the first speech pause at or after this length, or forcibly at this length plus 2.5 seconds. 10-15s recommended.'
+      )
       .addSlider((slider) =>
         slider
           .setLimits(5, 30, 5)
