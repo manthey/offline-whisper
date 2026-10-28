@@ -31,7 +31,7 @@ function log(message, data) {
   }
 }
 
-function getPlatformInfo() {
+function getPlatformInfo(useGpu) {
   const platform = process.platform;
   const arch = process.arch;
   let execNames = ['whisper-cli', 'main'];
@@ -39,7 +39,11 @@ function getPlatformInfo() {
   let repo = '';
   if (platform === 'win32') {
     execNames = ['whisper-cli.exe'];
-    archivePattern = 'whisper-blas-bin-x64.zip';
+    // The CUDA build bundles its CUDA runtime and cuBLAS, so it works without
+    // a CUDA toolkit installed, and whisper.cpp falls back to the CPU when no
+    // usable NVIDIA GPU is present. The CUDA 11.8 build omits the cuBLAS
+    // libraries, so the 12.4 build is used.
+    archivePattern = useGpu ? 'whisper-bin-win-cuda-12.4.0-x64.zip' : 'whisper-blas-bin-x64.zip';
     repo = 'https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest';
   } else if (platform === 'darwin') {
     repo = 'https://api.github.com/repos/bizenlabs/whisper-cpp-macos-bin/releases/latest';
@@ -300,12 +304,25 @@ function writeWavFile(filePath, audioData, sampleRate) {
   fs.writeFileSync(filePath, buffer);
 }
 
+// Extract backend names from ggml init output, e.g. 'load_backend: loaded
+// CUDA backend from ...' -> 'CUDA'. The lines are only printed when the
+// process is not run with the -np (no-prints) flag.
+function parseBackends(stderr) {
+  const matches = stderr.match(/loaded (\w+) backend/g) || [];
+  return [...new Set(matches.map((m) => m.replace('loaded ', '').replace(' backend', '')))];
+}
+
 class DesktopTranscriber {
-  constructor(plugin) {
+  constructor(plugin, options) {
     this.plugin = plugin;
     this.whisperPath = null;
     this.modelPath = null;
     this.initialized = false;
+    // GPU support is currently only available for the Windows CUDA build.
+    // macOS always uses Metal, and no prebuilt GPU binary exists for Linux.
+    this.useGpu = !!(options && options.useGpu) && getPlatformInfo().platform === 'win32';
+    this.gpuActive = false;
+    this.gpuProbed = false;
   }
 
   getNodeModules() {
@@ -332,22 +349,16 @@ class DesktopTranscriber {
   async initialize(modelId, progressCallback) {
     const { path, fs } = this.getNodeModules();
     const pluginDir = this.getPluginDir();
-    const binDir = path.join(pluginDir, 'bin');
+    // Use a separate binary directory for the GPU build so that switching
+    // between CPU and GPU does not discard a downloaded binary.
+    const binDir = path.join(pluginDir, this.useGpu ? 'bin-gpu' : 'bin');
     const modelsDir = path.join(pluginDir, 'models');
-    await this.ensureDir(binDir);
+    const platformInfo = getPlatformInfo(this.useGpu);
+    // The GPU directory may predate build tracking, and a stale GPU binary
+    // is unusable, so wipe it when no marker is present.
+    await this.prepareBinDir(binDir, platformInfo.archivePattern, this.useGpu);
     await this.ensureDir(modelsDir);
-    const platformInfo = getPlatformInfo();
-    this.whisperPath = findExecutable(binDir, platformInfo.execNames);
-    if (!this.whisperPath) {
-      log('Downloading whisper executable');
-      progressCallback({ status: 'downloading', message: 'Downloading whisper executable' });
-      await this.downloadExecutable(binDir, platformInfo, progressCallback);
-      this.whisperPath = findExecutable(binDir, platformInfo.execNames);
-      if (!this.whisperPath) {
-        const contents = listDirRecursive(binDir);
-        throw new Error('Could not find whisper executable after extraction. Contents: ' + contents.join(', '));
-      }
-    }
+    this.whisperPath = await this.ensureExecutable(platformInfo, binDir, progressCallback);
     if (platformInfo.platform !== 'win32') {
       fs.chmodSync(this.whisperPath, 0o755);
     }
@@ -362,6 +373,44 @@ class DesktopTranscriber {
     this.initialized = true;
     progressCallback({ status: 'ready' });
     log('Desktop transcriber initialized');
+  }
+
+  // Record which archive the binaries in a bin directory came from, and
+  // remove the directory when it holds binaries from a different build, so
+  // a changed archive pattern does not leave a stale unusable binary.
+  async prepareBinDir(binDir, archivePattern, wipeWithoutMarker) {
+    const { path, fs } = this.getNodeModules();
+    await this.ensureDir(binDir);
+    const markerPath = path.join(binDir, '.build');
+    if (fs.existsSync(markerPath)) {
+      const previousPattern = fs.readFileSync(markerPath, 'utf8');
+      if (previousPattern !== archivePattern) {
+        log(`Binary build changed from ${previousPattern} to ${archivePattern}; removing stale binaries`);
+        fs.rmSync(binDir, { recursive: true, force: true });
+        await this.ensureDir(binDir);
+      }
+    } else if (wipeWithoutMarker && findExecutable(binDir, getPlatformInfo().execNames)) {
+      log('Binary directory has no build marker; removing possible stale binaries');
+      fs.rmSync(binDir, { recursive: true, force: true });
+      await this.ensureDir(binDir);
+    }
+    fs.writeFileSync(markerPath, archivePattern);
+  }
+
+  async ensureExecutable(platformInfo, binDir, progressCallback) {
+    let execPath = findExecutable(binDir, platformInfo.execNames);
+    if (!execPath) {
+      log('Downloading whisper executable');
+      const report = progressCallback || (() => {});
+      report({ status: 'downloading', message: 'Downloading whisper executable' });
+      await this.downloadExecutable(binDir, platformInfo, report);
+      execPath = findExecutable(binDir, platformInfo.execNames);
+      if (!execPath) {
+        const contents = listDirRecursive(binDir);
+        throw new Error('Could not find whisper executable after extraction. Contents: ' + contents.join(', '));
+      }
+    }
+    return execPath;
   }
 
   async downloadExecutable(binDir, platformInfo, progressCallback) {
@@ -396,7 +445,7 @@ class DesktopTranscriber {
   }
 
   async transcribe(audioData) {
-    const { path, fs, os, spawn } = this.getNodeModules();
+    const { path, fs, os } = this.getNodeModules();
     if (!this.initialized) {
       throw new Error('Transcriber not initialized');
     }
@@ -404,10 +453,49 @@ class DesktopTranscriber {
     const tempWavPath = path.join(tempDir, `whisper-${Date.now()}.wav`);
     writeWavFile(tempWavPath, audioData, 16000);
     log('Wrote temp WAV: ' + tempWavPath);
+    try {
+      let result;
+      // The first run in a GPU session omits -np (no-prints) so that the
+      // backend initialization lines appear on stderr; the run itself reports
+      // which compute backends were loaded, at no extra cost.
+      try {
+        result = await this.runWhisper(this.whisperPath, tempWavPath, !(this.useGpu && !this.gpuProbed));
+      } catch (error) {
+        // When a GPU binary was requested but the run failed (for example an
+        // unsupported driver), retry once with the CPU binary.
+        if (!this.useGpu || this.gpuFailed) {
+          throw error;
+        }
+        log('GPU transcription failed; falling back to the CPU binary', error);
+        this.gpuFailed = true;
+        const cpuPlatformInfo = getPlatformInfo(false);
+        const cpuBinDir = path.join(this.getPluginDir(), 'bin');
+        await this.ensureDir(cpuBinDir);
+        const cpuPath = await this.ensureExecutable(cpuPlatformInfo, cpuBinDir);
+        if (cpuPlatformInfo.platform !== 'win32') {
+          fs.chmodSync(cpuPath, 0o755);
+        }
+        result = await this.runWhisper(cpuPath, tempWavPath, !this.gpuProbed);
+      }
+      return { text: result.text };
+    } finally {
+      try {
+        fs.unlinkSync(tempWavPath);
+      } catch (e) {
+        log('Failed to delete temp file', e);
+      }
+    }
+  }
+
+  runWhisper(whisperPath, tempWavPath, suppressPrints) {
+    const { spawn } = this.getNodeModules();
     return new Promise((resolve, reject) => {
-      const args = ['-m', this.modelPath, '-f', tempWavPath, '-nt', '-np'];
-      log('Spawning whisper: ' + this.whisperPath + ' ' + args.join(' '));
-      const proc = spawn(this.whisperPath, args);
+      const args = ['-m', this.modelPath, '-f', tempWavPath, '-nt'];
+      if (suppressPrints !== false) {
+        args.push('-np');
+      }
+      log('Spawning whisper: ' + whisperPath + ' ' + args.join(' '));
+      const proc = spawn(whisperPath, args);
       let stdout = '';
       let stderr = '';
       proc.stdout.on('data', (data) => {
@@ -417,12 +505,27 @@ class DesktopTranscriber {
         stderr += data.toString();
       });
       proc.on('close', (code) => {
-        try {
-          fs.unlinkSync(tempWavPath);
-        } catch (e) {
-          log('Failed to delete temp file', e);
-        }
         if (code === 0) {
+          const backends = parseBackends(stderr);
+          if (backends.length) {
+            log('Loaded compute backends: ' + backends.join(', '));
+          }
+          if (this.useGpu && !this.gpuProbed) {
+            this.gpuProbed = true;
+            this.gpuActive = backends.some((backend) => backend.toLowerCase() !== 'cpu');
+            if (this.gpuActive) {
+              log('Transcription will use the GPU');
+            } else {
+              log('No GPU backend detected; transcription will use the CPU');
+              const diagnostics = stderr
+                .split(/\r?\n/)
+                .filter((line) => /backend|cuda|vulkan|driver|error|fail|warn/i.test(line))
+                .slice(0, 10);
+              if (diagnostics.length) {
+                log('GPU diagnostics', diagnostics);
+              }
+            }
+          }
           const text = stdout.trim();
           log('Transcription result: ' + text);
           resolve({ text });
@@ -432,9 +535,6 @@ class DesktopTranscriber {
         }
       });
       proc.on('error', (error) => {
-        try {
-          fs.unlinkSync(tempWavPath);
-        } catch (e) {}
         log('whisper.cpp spawn error', error);
         reject(error);
       });
@@ -457,11 +557,14 @@ class DesktopTranscriber {
     if (fs.existsSync(modelsDir)) {
       fs.rmSync(modelsDir, { recursive: true, force: true });
     }
-    const binDir = path.join(pluginDir, 'bin');
-    if (fs.existsSync(binDir)) {
-      fs.rmSync(binDir, { recursive: true, force: true });
+    const binDirs = ['bin', 'bin-gpu'];
+    for (const binDirName of binDirs) {
+      const binDir = path.join(pluginDir, binDirName);
+      if (fs.existsSync(binDir)) {
+        fs.rmSync(binDir, { recursive: true, force: true });
+      }
     }
   }
 }
 
-module.exports = { DesktopTranscriber };
+module.exports = { DesktopTranscriber, getPlatformInfo, parseBackends };

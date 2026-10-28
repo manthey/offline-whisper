@@ -18,6 +18,16 @@ On mobile operating systems (Android, iOS), the plugin utilizes a bundled versio
 
 Navigate to the plugin settings to select a model. Models are downloaded from Hugging Face on first use. The larger the model, the slower it is. On the tested devices, the "base" model works on mobile devices and the "small" model works on desktop devices. It is recommended that you choose the largest model that can keep up with transcribing speech.
 
+## GPU Acceleration
+
+The "Compute device" setting offers "GPU if available" as an opt-in alternative to the default CPU on Windows and on mobile devices.
+
+On Windows, enabling it downloads a CUDA-enabled whisper binary (about 685MB) into a separate directory on first use and uses an NVIDIA GPU when one is present. If no usable GPU is available, or if the GPU transcription fails, transcription falls back to the CPU automatically. When multiple GPUs are present, whisper.cpp uses its default device.
+
+On mobile devices, enabling it uses WebGPU when the browser provides it, falling back to the CPU (WebAssembly) automatically otherwise.
+
+On macOS, transcription already uses Metal acceleration by default, and no setting is shown. On Linux, no GPU-enabled whisper binary is available for download, so no setting is shown.
+
 ## Usage
 
 In any note, select the ribbon icon or the command palette 'Toggle Voice Transcription' command to start transcribing. Select it again to stop. The audio is not saved except briefly on desktop platforms to perform the transcription.

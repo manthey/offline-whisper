@@ -8,6 +8,11 @@ const { AudioSegmenter } = require('./audio-segmenter.js');
 // Set to true in tests to force desktop code path
 const _platformOverride = typeof globalThis.__desktopOverride !== 'undefined' ? globalThis.__desktopOverride : undefined;
 const isMobilePlatform = _platformOverride !== undefined ? !_platformOverride : (typeof process === 'undefined' || !process.versions || !process.versions.electron);
+// GPU acceleration is offered where a GPU-capable backend exists: Windows has
+// a downloadable CUDA build, and mobile uses WebGPU. macOS always uses Metal
+// already, and no prebuilt GPU binary exists for Linux, so the setting is
+// hidden there.
+const isWindowsDesktop = !isMobilePlatform && typeof process !== 'undefined' && process.platform === 'win32';
 
 if (isMobilePlatform) {
   const transformers = require('@huggingface/transformers');
@@ -76,6 +81,7 @@ class WhisperTranscriptionPlugin extends Plugin {
     modelId: 'onnx-community/whisper-base.en',
     chunkDurationMs: 10000,
     regexFilter: this.defaultFilter,
+    computeDevice: 'cpu',
   };
   transcriber = null;
   desktopTranscriber = null;
@@ -195,7 +201,7 @@ class WhisperTranscriptionPlugin extends Plugin {
     try {
       // Desktop path: use whisper.cpp
       if (!isMobilePlatform) {
-        this.desktopTranscriber = new DesktopTranscriber(this);
+        this.desktopTranscriber = new DesktopTranscriber(this, { useGpu: this.settings.computeDevice === 'gpu' });
         await this.desktopTranscriber.initialize(this.settings.modelId, (progress) => {
           if (progress.message) {
             this.showStatus(progress.message, true);
@@ -216,29 +222,46 @@ class WhisperTranscriptionPlugin extends Plugin {
         this.showStatus(`Downloading model: ${this.settings.modelId}. This only happens once.`, true);
         log('Downloading model (online required)');
       }
-      this.transcriber = await pipeline(
-        'automatic-speech-recognition',
-        this.settings.modelId,
-        {
-          dtype: {
-            encoder_model: 'fp32',
-            decoder_model_merged: 'q4',
-          },
-          progress_callback: (progress) => {
-            if (progress.status === 'downloading' || progress.status === 'progress') {
-              if (progress.total) {
-                const pct = Math.round((progress.loaded / progress.total) * 100);
-                const mb = Math.round(progress.loaded / 1024 / 1024);
-                this.showStatus(`${cached? "Loading" : "Downloading"}: ${pct}% (${mb}MB)`, true);
-              }
-            } else if (progress.status === 'loading') {
-              this.showStatus('Initializing model', true);
-            } else if (progress.status === 'ready') {
-              log('Model ready status received', true);
+      const pipelineOptions = {
+        dtype: {
+          encoder_model: 'fp32',
+          decoder_model_merged: 'q4',
+        },
+        progress_callback: (progress) => {
+          if (progress.status === 'downloading' || progress.status === 'progress') {
+            if (progress.total) {
+              const pct = Math.round((progress.loaded / progress.total) * 100);
+              const mb = Math.round(progress.loaded / 1024 / 1024);
+              this.showStatus(`${cached? "Loading" : "Downloading"}: ${pct}% (${mb}MB)`, true);
             }
-          },
+          } else if (progress.status === 'loading') {
+            this.showStatus('Initializing model', true);
+          } else if (progress.status === 'ready') {
+            log('Model ready status received', true);
+          }
+        },
+      };
+      // GPU acceleration on mobile uses WebGPU when the browser provides it.
+      // Any failure (unsupported browser, driver issues, out of memory) falls
+      // back to the CPU (WASM) path automatically.
+      const useWebGpu =
+        this.settings.computeDevice === 'gpu' && typeof navigator !== 'undefined' && !!navigator.gpu;
+      if (useWebGpu) {
+        pipelineOptions.device = 'webgpu';
+        log('Requesting WebGPU for transcription');
+      }
+      let mobilePipeline;
+      try {
+        mobilePipeline = await pipeline('automatic-speech-recognition', this.settings.modelId, pipelineOptions);
+      } catch (pipelineError) {
+        if (!useWebGpu) {
+          throw pipelineError;
         }
-      );
+        log('WebGPU pipeline failed; falling back to WASM', pipelineError);
+        delete pipelineOptions.device;
+        mobilePipeline = await pipeline('automatic-speech-recognition', this.settings.modelId, pipelineOptions);
+      }
+      this.transcriber = mobilePipeline;
       this.isModelLoading = false;
       log('Model loaded successfully');
       this.showStatus('Model ready', true);
@@ -808,6 +831,28 @@ class WhisperSettingTab extends PluginSettingTab {
             }
           })
       );
+    if (isWindowsDesktop || isMobilePlatform) {
+      new Setting(containerEl)
+        .setName('Compute device')
+        .setDesc(
+          isWindowsDesktop
+            ? 'CPU is the default. "GPU if available" downloads a CUDA-enabled whisper binary on first use, uses an NVIDIA GPU when one is present, and falls back to the CPU otherwise.'
+            : 'CPU is the default. "GPU if available" uses WebGPU when the browser provides it and falls back to the CPU otherwise.'
+        )
+        .addDropdown((dropdown) =>
+          dropdown
+            .addOption('cpu', 'CPU')
+            .addOption('gpu', 'GPU if available')
+            .setValue(this.plugin.settings.computeDevice)
+            .onChange(async (value) => {
+              this.plugin.settings.computeDevice = value;
+              this.plugin.transcriber = null;
+              this.plugin.desktopTranscriber = null;
+              await this.plugin.saveSettings();
+              new Notice('Compute device changed. Takes effect on next recording.');
+            })
+        );
+    }
     new Setting(containerEl)
       .setName('Chunk duration (seconds)')
       .setDesc(

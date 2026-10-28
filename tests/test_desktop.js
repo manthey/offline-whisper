@@ -70,6 +70,28 @@ async function run() {
     }
     console.log('PASS: Desktop transcription matched expected phrase');
   }
+  // Test GPU mode. On Windows this downloads the CUDA-enabled binary into a
+  // separate bin-gpu directory and runs it; whisper.cpp falls back to the CPU
+  // internally when no NVIDIA GPU is available. On other platforms the option
+  // is ignored and the CPU binary is reused.
+  const gpuTranscriber = new DesktopTranscriber(mockPlugin, { useGpu: true });
+  await gpuTranscriber.initialize(modelId, () => {});
+  console.log('GPU-mode whisper binary: ' + gpuTranscriber.whisperPath);
+  if (process.platform === 'win32' && !gpuTranscriber.whisperPath.replace(/\\/g, '/').includes('bin-gpu')) {
+    console.error('GPU mode did not use the bin-gpu directory');
+    process.exit(1);
+  }
+  const gpuResult = await gpuTranscriber.transcribe(readWavAsFloat32(testAudioPath));
+  const gpuText = (gpuResult.text || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, '');
+  console.log('GPU-mode transcribed: "' + gpuText + '"');
+  if (!gpuText.includes(EXPECTED_PHRASE)) {
+    console.error('GPU-mode transcription did not contain expected phrase');
+    process.exit(1);
+  }
+  console.log('PASS: GPU-mode transcription matched expected phrase');
   // Test cache detection
   const isCached = transcriber.isModelCached(modelId);
   if (!isCached) {

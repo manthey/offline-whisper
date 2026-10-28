@@ -945,3 +945,81 @@ describe('toggleRecording edge cases', () => {
     expect(result).toBe(undefined);
   });
 });
+
+describe('compute device setting (mobile WebGPU path)', () => {
+  const transformersMock = require('@huggingface/transformers');
+
+  beforeEach(() => {
+    transformersMock.pipeline.calls.length = 0;
+    transformersMock.pipeline.failNext = null;
+  });
+
+  async function setupPlugin() {
+    const { app, plugin } = createPlugin();
+    await plugin.onload();
+    Object.defineProperty(global, 'caches', {
+      value: { keys: jest.fn(() => Promise.resolve([])) },
+      writable: true,
+    });
+    jest.spyOn(plugin, 'showStatus').mockReturnValue(undefined);
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    app.workspace.getActiveViewOfType = () => ({ editor: {} });
+    plugin.isModelLoading = false;
+    plugin.transcriber = null;
+    return { app, plugin };
+  }
+
+  function setWebGpuAvailable(available) {
+    Object.defineProperty(navigator, 'gpu', { value: available ? {} : undefined, configurable: true });
+  }
+  function clearWebGpu() {
+    delete navigator.gpu;
+  }
+
+  afterEach(() => {
+    clearWebGpu();
+  });
+
+  test('defaults the compute device to CPU', () => {
+    const { plugin } = createPlugin();
+    expect(plugin.settings.computeDevice).toBe('cpu');
+  });
+
+  test('loadModel requests WebGPU when the setting is GPU and the browser supports it', async () => {
+    setWebGpuAvailable(true);
+    const { plugin } = await setupPlugin();
+    plugin.settings.computeDevice = 'gpu';
+    await plugin.loadModel();
+    expect(transformersMock.pipeline.calls).toHaveLength(1);
+    expect(transformersMock.pipeline.calls[0].options.device).toBe('webgpu');
+  });
+
+  test('loadModel omits the device when WebGPU is unavailable', async () => {
+    setWebGpuAvailable(false);
+    const { plugin } = await setupPlugin();
+    plugin.settings.computeDevice = 'gpu';
+    await plugin.loadModel();
+    expect(transformersMock.pipeline.calls).toHaveLength(1);
+    expect(transformersMock.pipeline.calls[0].options.device).toBeUndefined();
+  });
+
+  test('loadModel falls back to WASM when the WebGPU pipeline fails', async () => {
+    setWebGpuAvailable(true);
+    transformersMock.pipeline.failNext = 'webgpu failed';
+    const { plugin } = await setupPlugin();
+    plugin.settings.computeDevice = 'gpu';
+    await plugin.loadModel();
+    expect(transformersMock.pipeline.calls).toHaveLength(2);
+    expect(transformersMock.pipeline.calls[0].options.device).toBe('webgpu');
+    expect(transformersMock.pipeline.calls[1].options.device).toBeUndefined();
+  });
+
+  test('loadModel uses WASM when the setting is CPU', async () => {
+    setWebGpuAvailable(true);
+    const { plugin } = await setupPlugin();
+    plugin.settings.computeDevice = 'cpu';
+    await plugin.loadModel();
+    expect(transformersMock.pipeline.calls).toHaveLength(1);
+    expect(transformersMock.pipeline.calls[0].options.device).toBeUndefined();
+  });
+});
