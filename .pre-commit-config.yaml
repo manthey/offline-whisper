@@ -3,6 +3,8 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
 default_stages: [pre-commit, pre-push]
+default_language_version:
+  node: lts
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -43,8 +45,8 @@ repos:
         args:
           - --ignore-words-list
           - afterAll
-  - repo: https://github.com/pre-commit/mirrors-prettier
-    rev: v4.0.0-alpha.8
+  - repo: https://github.com/rbubley/mirrors-prettier
+    rev: v3.9.9
     hooks:
       - id: prettier
         # This overrides the default to run on html, css, and js

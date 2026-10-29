@@ -2,7 +2,10 @@ name: Test Obsidian Plugin
 
 on:
   push:
+    branches: ['**']
   pull_request:
+  release:
+    types: [published]
   schedule:
     # Weekly check that the plugin's download links still resolve and that
     # binaries and models still download and transcribe on all platforms.
@@ -74,7 +77,7 @@ jobs:
       - test-desktop
       - test-mobile
     runs-on: ubuntu-latest
-    if: needs.test-desktop.result == 'success' && needs.test-mobile.result == 'success'
+    if: github.event_name != 'release' && needs.test-desktop.result == 'success' && needs.test-mobile.result == 'success'
     permissions:
       contents: write
       id-token: write
@@ -93,20 +96,21 @@ jobs:
       - name: Build
         run: npm run build
       - name: Delete existing latest release
-        if: github.ref_name == 'master'
+        if: github.event_name == 'push' && github.ref_name == 'master'
         run: |
           if gh release view latest >/dev/null 2>&1; then
-            gh release delete latest --yes
+            gh release delete latest --cleanup-tag --yes
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Update latest release
-        if: github.ref_name == 'master'
+        if: github.event_name == 'push' && github.ref_name == 'master'
         uses: softprops/action-gh-release@v3
         env:
           GITHUB_ACTION_GH_RELEASE_QUIET: 'true'
         with:
           tag_name: latest
+          target_commitish: ${{ github.sha }}
           name: Latest
           body: Master branch
           files: |
@@ -116,30 +120,61 @@ jobs:
           prerelease: true
           make_latest: true
           generate_release_notes: false
-      - name: Bump package.json version from git tag
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          npm version $TAG --no-git-tag-version
-          VERSION=${TAG#v}
-          jq --arg version "$VERSION" '.version = $version' manifest.json > tmp.json && mv tmp.json manifest.json
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add package.json manifest.json
-          git commit --amend --no-edit
-          git tag -f $TAG
-      - name: Create proper GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v3
-        with:
-          files: |
-            main.js
-            manifest.json
-            versions.json
-          fail_on_unmatched_files: false
-          generate_release_notes: true
       - name: Generate artifact attestation
-        if: startsWith(github.ref, 'refs/tags/') || github.ref_name == 'master'
+        if: github.event_name == 'push' && github.ref_name == 'master'
         uses: actions/attest@v4
         with:
           subject-path: 'main.js'
+
+  release:
+    needs:
+      - test-desktop
+      - test-mobile
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Validate tag
+        run: |
+          if ! [[ "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag '$TAG' must be a bare x.y.z version (no v prefix)"
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+      - name: Use Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Set version from tag
+        run: |
+          npm version "$TAG" --no-git-tag-version --allow-same-version
+          jq --arg v "$TAG" '.version = $v' manifest.json > tmp.json && mv tmp.json manifest.json
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Attach assets to the release
+        run: gh release upload "$TAG" main.js manifest.json --clobber
+      - name: Generate artifact attestation
+        uses: actions/attest@v4
+        with:
+          subject-path: 'main.js'
+      - name: Commit version to master
+        if: ${{ !github.event.release.prerelease }}
+        run: |
+          git fetch origin master
+          git checkout -f -B master origin/master
+          npm version "$TAG" --no-git-tag-version --allow-same-version
+          jq --arg v "$TAG" '.version = $v' manifest.json > tmp.json && mv tmp.json manifest.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json manifest.json
+          git diff --cached --quiet || git commit -m "Release $TAG"
+          git push origin master
