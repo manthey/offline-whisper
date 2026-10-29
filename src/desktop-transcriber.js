@@ -550,6 +550,16 @@ class DesktopTranscriber {
     return fs.existsSync(modelPath);
   }
 
+  // Whether the whisper binary for this transcriber's compute device setting
+  // has already been downloaded and extracted.
+  isExecutableCached() {
+    const { path } = this.getNodeModules();
+    const pluginDir = this.getPluginDir();
+    const binDir = path.join(pluginDir, this.useGpu ? 'bin-gpu' : 'bin');
+    const platformInfo = getPlatformInfo(this.useGpu);
+    return !!findExecutable(binDir, platformInfo.execNames);
+  }
+
   clearCache() {
     const { path, fs } = this.getNodeModules();
     const pluginDir = this.getPluginDir();

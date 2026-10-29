@@ -108,6 +108,8 @@ class WhisperTranscriptionPlugin extends Plugin {
   nextInsertChunk = 1;
   pendingResults = new Map();
   wakeLock = null;
+  // Number of model or executable downloads currently in progress.
+  downloadCount = 0;
 
   async onload() {
     log('Plugin loading');
@@ -187,6 +189,17 @@ class WhisperTranscriptionPlugin extends Plugin {
     this.wakeLock = null;
   }
 
+  // Run a task while marking a download as in progress, so the cache Check
+  // button can report that assets are not ready while files are arriving.
+  async trackDownload(run) {
+    this.downloadCount++;
+    try {
+      return await run();
+    } finally {
+      this.downloadCount--;
+    }
+  }
+
   async loadModel() {
     if (this.transcriber) {
       log('Model already loaded');
@@ -201,13 +214,20 @@ class WhisperTranscriptionPlugin extends Plugin {
     try {
       // Desktop path: use whisper.cpp
       if (!isMobilePlatform) {
-        this.desktopTranscriber = new DesktopTranscriber(this, { useGpu: this.settings.computeDevice === 'gpu' });
-        await this.desktopTranscriber.initialize(this.settings.modelId, (progress) => {
-          if (progress.message) {
-            this.showStatus(progress.message, true);
+        // Bind the wrapper to a local reference: the settings handlers null
+        // this.desktopTranscriber when the device or model changes, which can
+        // happen while initialize() is awaiting, and re-reading the property
+        // here would wrap null.
+        const transcriber = new DesktopTranscriber(this, { useGpu: this.settings.computeDevice === 'gpu' });
+        this.desktopTranscriber = transcriber;
+        await this.trackDownload(() =>
+          transcriber.initialize(this.settings.modelId, (progress) => {
+            if (progress.message) {
+              this.showStatus(progress.message, true);
           }
-        });
-        this.transcriber = (audioData) => this.desktopTranscriber.transcribe(audioData);
+          })
+        );
+        this.transcriber = (audioData) => transcriber.transcribe(audioData);
         this.isModelLoading = false;
         log('Desktop transcriber ready');
         this.showStatus('Model ready', 2000);
@@ -252,14 +272,18 @@ class WhisperTranscriptionPlugin extends Plugin {
       }
       let mobilePipeline;
       try {
-        mobilePipeline = await pipeline('automatic-speech-recognition', this.settings.modelId, pipelineOptions);
+        mobilePipeline = await this.trackDownload(() =>
+          pipeline('automatic-speech-recognition', this.settings.modelId, pipelineOptions)
+        );
       } catch (pipelineError) {
         if (!useWebGpu) {
           throw pipelineError;
         }
         log('WebGPU pipeline failed; falling back to WASM', pipelineError);
         delete pipelineOptions.device;
-        mobilePipeline = await pipeline('automatic-speech-recognition', this.settings.modelId, pipelineOptions);
+        mobilePipeline = await this.trackDownload(() =>
+          pipeline('automatic-speech-recognition', this.settings.modelId, pipelineOptions)
+        );
       }
       this.transcriber = mobilePipeline;
       this.isModelLoading = false;
@@ -277,6 +301,38 @@ class WhisperTranscriptionPlugin extends Plugin {
       }
       return false;
     }
+  }
+
+  // Download whatever is missing for offline use with the current settings:
+  // the whisper.cpp binary (CPU or GPU) and the model on desktop, or the
+  // transformers.js model on mobile. Unlike loadModel, this never treats an
+  // already loaded model as done: a loaded transcriber may predate a settings
+  // change (for example switching the compute device mid-download), so the
+  // current settings are always verified against the cache.
+  async downloadOfflineAssets() {
+    if (isMobilePlatform) {
+      // On mobile there is no separate binary; the model files are the same
+      // for CPU and WebGPU, so an already loaded model means the cache is
+      // populated and loadModel returns immediately.
+      return this.loadModel();
+    }
+    const transcriber = new DesktopTranscriber(this, { useGpu: this.settings.computeDevice === 'gpu' });
+    await this.trackDownload(() =>
+      transcriber.initialize(this.settings.modelId, (progress) => {
+        if (progress.message) {
+          this.showStatus(progress.message, true);
+        }
+      })
+    );
+    // Adopt the fresh transcriber only when none is loaded; a loaded one
+    // keeps working with the settings it was created with until the next
+    // settings change rebuilds it.
+    if (!this.transcriber) {
+      this.desktopTranscriber = transcriber;
+      this.transcriber = (audioData) => transcriber.transcribe(audioData);
+      this.showStatus('Model ready', 2000);
+    }
+    return true;
   }
 
   async toggleRecording(state) {
@@ -882,21 +938,44 @@ class WhisperSettingTab extends PluginSettingTab {
       );
     new Setting(containerEl)
       .setName('Check model cache')
-      .setDesc('See if the current model is cached for offline use')
+      .setDesc('See if the current model and executable are cached for offline use, or download them now')
       .addButton((button) =>
         button
           .setButtonText('Check')
           .onClick(async () => {
+            if (this.plugin.downloadCount > 0) {
+              new Notice('Download in progress - not ready yet');
+              return;
+            }
             let cached;
-            if (!isMobilePlatform && this.plugin.desktopTranscriber) {
-              cached = this.plugin.desktopTranscriber.isModelCached(this.plugin.settings.modelId);
-            } else if (!isMobilePlatform) {
-              const tempTranscriber = new DesktopTranscriber(this.plugin);
-              cached = tempTranscriber.isModelCached(this.plugin.settings.modelId);
+            if (!isMobilePlatform) {
+              const transcriber =
+                this.plugin.desktopTranscriber ||
+                new DesktopTranscriber(this.plugin, { useGpu: this.plugin.settings.computeDevice === 'gpu' });
+              cached = transcriber.isModelCached(this.plugin.settings.modelId) && transcriber.isExecutableCached();
             } else {
               cached = await isModelCached(this.plugin.settings.modelId);
             }
             new Notice(cached ? 'Model is cached - offline ready' : 'Model not cached - needs download');
+          })
+      )
+      .addButton((button) =>
+        button
+          .setButtonText('Download')
+          .onClick(async () => {
+            button.setDisabled(true);
+            try {
+              // Progress is shown via status notices during the download.
+              const success = await this.plugin.downloadOfflineAssets();
+              if (success) {
+                new Notice('Model downloaded - offline ready');
+              }
+            } catch (err) {
+              log('Download button failed', err);
+              new Notice('Download failed: ' + err.message, 5000);
+            } finally {
+              button.setDisabled(false);
+            }
           })
       );
     new Setting(containerEl)

@@ -706,7 +706,136 @@ describe('WhisperSettingTab model change notifications', () => {
 
     // Verify Check model cache section exists with Check button
     expect(containerEl.innerHTML).toContain('Check model cache');
-    expect(containerEl.innerHTML).toContain('See if the current model is cached for offline use');
+    expect(containerEl.innerHTML).toContain('See if the current model and executable are cached for offline use');
+  });
+
+  test('Check button reports offline ready when the model is cached', async () => {
+    mockCacheKeys = ['transformers-cache'];
+    mockCachesOpenKeys = ['https://huggingface.co/onnx-community/whisper-base.en/config.json'];
+    const { app, plugin } = createPlugin();
+    await plugin.loadSettings();
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    const tab = new WhisperSettingTab(app.asOriginalType__(), plugin);
+    tab.containerEl = document.createElement('div');
+    const before = (globalThis._capturedBtns || []).length;
+    tab.display();
+
+    const checkItem = (globalThis._capturedBtns || [])
+      .slice(before)
+      .find((h) => String(h.handler).includes('isModelCached'));
+    await checkItem.handler.call(tab);
+
+    expect(logSpy).toHaveBeenCalledWith('[Notice] Model is cached - offline ready');
+    logSpy.mockRestore();
+  });
+
+  test('Check button reports a download is needed when nothing is cached', async () => {
+    mockCacheKeys = [];
+    const { app, plugin } = createPlugin();
+    await plugin.loadSettings();
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    const tab = new WhisperSettingTab(app.asOriginalType__(), plugin);
+    tab.containerEl = document.createElement('div');
+    const before = (globalThis._capturedBtns || []).length;
+    tab.display();
+
+    const checkItem = (globalThis._capturedBtns || [])
+      .slice(before)
+      .find((h) => String(h.handler).includes('isModelCached'));
+    await checkItem.handler.call(tab);
+
+    expect(logSpy).toHaveBeenCalledWith('[Notice] Model not cached - needs download');
+    logSpy.mockRestore();
+  });
+
+  test('Check button reports an in-progress download without consulting the cache', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.loadSettings();
+    plugin.downloadCount = 1;
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    const tab = new WhisperSettingTab(app.asOriginalType__(), plugin);
+    tab.containerEl = document.createElement('div');
+    const before = (globalThis._capturedBtns || []).length;
+    tab.display();
+
+    const checkItem = (globalThis._capturedBtns || [])
+      .slice(before)
+      .find((h) => String(h.handler).includes('isModelCached'));
+    global.caches.keys.mockClear();
+    await checkItem.handler.call(tab);
+
+    expect(logSpy).toHaveBeenCalledWith('[Notice] Download in progress - not ready yet');
+    expect(global.caches.keys).not.toHaveBeenCalled();
+    logSpy.mockRestore();
+  });
+
+  test('Download button is present next to the Check button', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.loadSettings();
+
+    const tab = new WhisperSettingTab(app.asOriginalType__(), plugin);
+    const containerEl = document.createElement('div');
+    tab.containerEl = containerEl;
+    tab.display();
+
+    // Verify the Download button exists in the Check model cache section
+    expect(containerEl.innerHTML).toContain('Download');
+  });
+
+  test('Download button calls downloadOfflineAssets and shows offline ready notice', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.loadSettings();
+    const downloadSpy = jest.spyOn(plugin, 'downloadOfflineAssets').mockResolvedValue(true);
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    const tab = new WhisperSettingTab(app.asOriginalType__(), plugin);
+    const containerEl = document.createElement('div');
+    tab.containerEl = containerEl;
+    const before = (globalThis._capturedBtns || []).length;
+    tab.display();
+
+    const handlers = (globalThis._capturedBtns || []).slice(before);
+    const downloadItem = handlers.find((h) => h.btn.containerEl.textContent === 'Download');
+    expect(downloadItem).toBeDefined();
+
+    await downloadItem.handler.call(tab);
+
+    expect(downloadSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith('[Notice] Model downloaded - offline ready');
+    logSpy.mockRestore();
+  });
+
+  test('downloadOfflineAssets delegates to loadModel on mobile', async () => {
+    const { plugin } = createPlugin();
+    await plugin.loadSettings();
+    const loadModelSpy = jest.spyOn(plugin, 'loadModel').mockResolvedValue(true);
+
+    await expect(plugin.downloadOfflineAssets()).resolves.toBe(true);
+    expect(loadModelSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test('Download button shows a notice when downloading fails', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.loadSettings();
+    jest.spyOn(plugin, 'downloadOfflineAssets').mockRejectedValue(new Error('no network'));
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    const tab = new WhisperSettingTab(app.asOriginalType__(), plugin);
+    const containerEl = document.createElement('div');
+    tab.containerEl = containerEl;
+    const before = (globalThis._capturedBtns || []).length;
+    tab.display();
+
+    const handlers = (globalThis._capturedBtns || []).slice(before);
+    const downloadItem = handlers.find((h) => h.btn.containerEl.textContent === 'Download');
+
+    await downloadItem.handler.call(tab);
+
+    expect(logSpy).toHaveBeenCalledWith('[Notice] Download failed: no network');
+    logSpy.mockRestore();
   });
 });
 
