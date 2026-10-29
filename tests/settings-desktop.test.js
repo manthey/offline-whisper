@@ -1,12 +1,20 @@
 // Desktop-mode settings tab tests. Forces desktop via globalThis.__desktopOverride
-// before module load. Windows-specific behavior lives in settings-windows.test.js.
+// before module load, and pins a non-Windows platform so the Windows-only
+// compute device setting is hidden regardless of the host OS. Windows-specific
+// behavior lives in settings-windows.test.js.
 globalThis.__desktopOverride = true;
+const originalPlatform = process.platform;
+Object.defineProperty(process, 'platform', { value: 'linux' });
 jest.mock('../src/desktop-transcriber.js', () => ({
   DesktopTranscriber: jest.fn(),
 }));
 
 const WhisperTranscriptionPlugin = require('../src/main.js');
 const { WhisperSettingTab } = WhisperTranscriptionPlugin;
+
+afterAll(() => {
+  Object.defineProperty(process, 'platform', { value: originalPlatform });
+});
 
 function makeManifest() {
   return {

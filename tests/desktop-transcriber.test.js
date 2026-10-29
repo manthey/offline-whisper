@@ -483,11 +483,21 @@ describe('transcription runs', () => {
     Object.defineProperty(process, 'platform', { value: originalPlatform });
   });
 
+  // Transcriptions write their temp WAV files into the OS temp directory,
+  // which is shared with other runs; point the transcriber at a private
+  // directory so leftover detection is deterministic on any host.
+  const runTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'whisper-run-tmp-'));
+  afterAll(() => {
+    fs.rmSync(runTmp, { recursive: true, force: true });
+  });
+
   function makeInitializedTranscriber() {
     const transcriber = makeTranscriber();
     transcriber.initialized = true;
     transcriber.whisperPath = path.join(tempVault, 'fake-whisper-cli');
     transcriber.modelPath = path.join(pluginDir, 'models', 'ggml-base.en.bin');
+    const realModules = transcriber.getNodeModules();
+    transcriber.getNodeModules = () => ({ ...realModules, os: { tmpdir: () => runTmp } });
     return transcriber;
   }
 
@@ -519,8 +529,8 @@ describe('transcription runs', () => {
     expect(args).toContain('-m');
     expect(args).toContain(transcriber.modelPath);
     expect(args).toContain('-np');
-    // No temp wav files are left behind.
-    const leftovers = fs.readdirSync(os.tmpdir()).filter((name) => /^whisper-\d+\.wav$/.test(name));
+    // No temp wav files are left behind in the transcription temp directory.
+    const leftovers = fs.readdirSync(runTmp).filter((name) => /^whisper-\d+\.wav$/.test(name));
     expect(leftovers).toEqual([]);
   });
 
