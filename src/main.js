@@ -882,7 +882,7 @@ class WhisperSettingTab extends PluginSettingTab {
       );
     new Setting(containerEl)
       .setName('Check model cache')
-      .setDesc('See if the current model is cached for offline use')
+      .setDesc('See if the current model is cached for offline use, or download it now')
       .addButton((button) =>
         button
           .setButtonText('Check')
@@ -897,6 +897,28 @@ class WhisperSettingTab extends PluginSettingTab {
               cached = await isModelCached(this.plugin.settings.modelId);
             }
             new Notice(cached ? 'Model is cached - offline ready' : 'Model not cached - needs download');
+          })
+      )
+      .addButton((button) =>
+        button
+          .setButtonText('Download')
+          .onClick(async () => {
+            button.setDisabled(true);
+            try {
+              // Downloads whatever is missing for offline use with the current
+              // settings: the whisper.cpp binary (CPU or GPU) and the model on
+              // desktop, or the transformers.js model on mobile. Progress is
+              // shown via status notices from loadModel.
+              const success = await this.plugin.loadModel();
+              if (success) {
+                new Notice('Model downloaded - offline ready');
+              }
+            } catch (err) {
+              log('Download button failed', err);
+              new Notice('Download failed: ' + err.message, 5000);
+            } finally {
+              button.setDisabled(false);
+            }
           })
       );
     new Setting(containerEl)

@@ -118,6 +118,34 @@ describe('WhisperSettingTab Target Code (Lines 582-621)', () => {
     expect(dtc.clearCache).toHaveBeenCalled();
   });
 
+  test('Download button initializes desktop transcriber to fetch binary and model', async () => {
+    clearState();
+    const plugin = createMockedPlugin();
+    // Provide an initialize mock so loadModel can complete the download path
+    const dtcModule = require('../src/desktop-transcriber.js');
+    const initialize = jest.fn().mockResolvedValue(undefined);
+    dtcModule.DesktopTranscriber.mockImplementation(() => ({
+      isModelCached: jest.fn(),
+      clearCache: jest.fn(),
+      initialize,
+    }));
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+    const tab = new WhisperSettingTab({}, plugin);
+    Object.defineProperty(tab, 'containerEl', { value: makeObsidianContainer(), writable: true });
+
+    await tab.display();
+
+    const downloadItem = getCapturedHandlers().find((h) => h.btn.containerEl.textContent === 'Download');
+    expect(downloadItem).toBeDefined();
+
+    await downloadItem.handler.call(tab);
+
+    expect(initialize).toHaveBeenCalledWith('onnx-community/whisper-base.en', expect.any(Function));
+    expect(logSpy).toHaveBeenCalledWith('[Notice] Model downloaded - offline ready');
+    logSpy.mockRestore();
+  });
+
   test('display() populates critical UI elements in desktop mode', async () => {
     const plugin = createMockedPlugin();
     const tab = new WhisperSettingTab({}, plugin);
