@@ -18,6 +18,10 @@ On mobile operating systems (Android, iOS), the plugin utilizes a bundled versio
 
 Navigate to the plugin settings to select a model. Models are downloaded from Hugging Face on first use. The larger the model, the slower it is. On the tested devices, the "base" model works on mobile devices and the "small" model works on desktop devices. It is recommended that you choose the largest model that can keep up with transcribing speech.
 
+## Transcription Speed
+
+The plugin measures how long each transcription takes relative to the length of its audio, over the ten most recent chunks. The "Transcription speed" entry on the settings page reports this ratio and what it means: a ratio above 1 second of transcription per second of audio means the model cannot keep up with speech and the transcription queue will grow while recording, so a smaller, faster model would be advised. A ratio well below 1 suggests a larger, more accurate model may still keep up. Record some audio, then reopen the settings to see the current measurement.
+
 ## GPU Acceleration
 
 The "Compute device" setting offers "GPU if available" as an opt-in alternative to the default CPU on Windows and on mobile devices.
