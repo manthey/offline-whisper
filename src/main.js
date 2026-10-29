@@ -110,6 +110,9 @@ class WhisperTranscriptionPlugin extends Plugin {
   wakeLock = null;
   // Number of model or executable downloads currently in progress.
   downloadCount = 0;
+  // Timing of the most recent transcription chunks, oldest first: each entry
+  // records the audio duration and the wall-clock time spent transcribing it.
+  recentTranscriptions = [];
 
   async onload() {
     log('Plugin loading');
@@ -686,10 +689,71 @@ class WhisperTranscriptionPlugin extends Plugin {
       clearTimeout(timeoutHandle);
     }
     const elapsed = Date.now() - startTime;
+    this.recordTranscriptionTiming(audioData, elapsed);
     log(`Chunk #${chunkNum} transcription complete in ${elapsed}ms`, result);
     const text = result && result.text ? result.text.trim() : '';
     log(`Chunk #${chunkNum} extracted text: "${text}"`);
     return text;
+  }
+
+  // Record how long one chunk took to transcribe relative to its audio
+  // duration, keeping only the most recent chunks so the estimate tracks the
+  // current model, device, and settings. A ratio above 1 (transcription time
+  // exceeding audio duration) means the transcription queue grows while
+  // recording, so the settings page uses this to suggest a smaller model.
+  recordTranscriptionTiming(audioData, transcribeMs) {
+    const audioSeconds = audioData.length / 16000;
+    this.recentTranscriptions.push({ audioSeconds, transcribeMs });
+    if (this.recentTranscriptions.length > 10) {
+      this.recentTranscriptions = this.recentTranscriptions.slice(-10);
+    }
+  }
+
+  // Discard the timing history: called when the model or compute device
+  // changes, since measurements taken with the previous model or device do
+  // not describe the speed of the new one.
+  resetTranscriptionTimings() {
+    this.recentTranscriptions = [];
+  }
+
+  // Aggregate the recent chunk timings. Returns null before anything has been
+  // transcribed; otherwise the ratio is the summed transcription time divided
+  // by the summed audio duration of those chunks (1.0 is real time).
+  transcriptionSpeedSummary() {
+    if (this.recentTranscriptions.length === 0) {
+      return null;
+    }
+    let audioSeconds = 0;
+    let transcribeSeconds = 0;
+    for (const entry of this.recentTranscriptions) {
+      audioSeconds += entry.audioSeconds;
+      transcribeSeconds += entry.transcribeMs / 1000;
+    }
+    return {
+      chunkCount: this.recentTranscriptions.length,
+      audioSeconds,
+      transcribeSeconds,
+      ratio: audioSeconds > 0 ? transcribeSeconds / audioSeconds : Infinity,
+    };
+  }
+
+  describeTranscriptionSpeed() {
+    const summary = this.transcriptionSpeedSummary();
+    if (!summary) {
+      return 'No recent transcriptions to measure. Record some audio, then reopen settings to see whether the model keeps up with speech.';
+    }
+    const chunks = summary.chunkCount === 1 ? 'chunk' : 'chunks';
+    const speed =
+      summary.ratio > 1
+        ? `${this.formatSpeedFactor(summary.ratio)}x slower than real time`
+        : `${this.formatSpeedFactor(1 / summary.ratio)}x faster than real time`;
+    return `The last ${summary.chunkCount} ${chunks} transcribed at ${speed}. If this is close to or slower than real time, try a smaller model; if substantially faster, try a bigger, more accurate model.`;
+  }
+
+  // Format a real-time multiple, e.g. 1.23 for slightly slower than real
+  // time or 5 for five times faster than real time.
+  formatSpeedFactor(value) {
+    return value >= 10 ? value.toFixed(1) : value.toFixed(2);
   }
 
   queueTranscriptionResult(text, chunkNum) {
@@ -847,10 +911,21 @@ class WhisperTranscriptionPlugin extends Plugin {
 }
 
 class WhisperSettingTab extends PluginSettingTab {
+  // The read-only setting that reports the recent transcription speed, kept
+  // so its description can be refreshed without rebuilding the whole page.
+  transcriptionSpeedSetting = null;
+
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
   }
+
+  updateTranscriptionSpeed() {
+    if (this.transcriptionSpeedSetting) {
+      this.transcriptionSpeedSetting.setDesc(this.plugin.describeTranscriptionSpeed());
+    }
+  }
+
   display() {
     const { containerEl } = this;
     containerEl.empty();
@@ -875,6 +950,8 @@ class WhisperSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.modelId = value;
             this.plugin.transcriber = null;
+            this.plugin.resetTranscriptionTimings();
+            this.updateTranscriptionSpeed();
             await this.plugin.saveSettings();
             let cached;
             if (!isMobilePlatform && this.plugin.desktopTranscriber) {
@@ -892,6 +969,9 @@ class WhisperSettingTab extends PluginSettingTab {
             }
           })
       );
+    this.transcriptionSpeedSetting = new Setting(containerEl)
+      .setName('Transcription speed')
+      .setDesc(this.plugin.describeTranscriptionSpeed());
     if (isWindowsDesktop || isMobilePlatform) {
       new Setting(containerEl)
         .setName('Compute device')
@@ -909,6 +989,8 @@ class WhisperSettingTab extends PluginSettingTab {
               this.plugin.settings.computeDevice = value;
               this.plugin.transcriber = null;
               this.plugin.desktopTranscriber = null;
+              this.plugin.resetTranscriptionTimings();
+              this.updateTranscriptionSpeed();
               await this.plugin.saveSettings();
               new Notice('Compute device changed. Takes effect on next recording.');
             })
