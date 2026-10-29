@@ -294,3 +294,43 @@ describe('DesktopTranscriber GPU option', () => {
     fs.rmSync(binDir, { recursive: true, force: true });
   });
 });
+
+describe('isExecutableCached', () => {
+  const originalPlatform = process.platform;
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const tempDir = fs.mkdtempSync(os.tmpdir() + path.sep + 'whisper-exe-cache-');
+  afterAll(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    Object.defineProperty(process, 'platform', { value: originalPlatform });
+  });
+
+  function makeTranscriber(useGpu, platform) {
+    Object.defineProperty(process, 'platform', { value: platform });
+    return new DesktopTranscriber(
+      { app: { vault: { adapter: { basePath: tempDir } } }, manifest: { dir: 'plugin' } },
+      { useGpu },
+    );
+  }
+
+  test('reports the CPU binary when present in the bin directory', () => {
+    const transcriber = makeTranscriber(false, 'linux');
+    expect(transcriber.isExecutableCached()).toBe(false);
+    const binDir = path.join(tempDir, 'plugin', 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(path.join(binDir, 'whisper-cli'), 'x');
+    expect(transcriber.isExecutableCached()).toBe(true);
+    fs.rmSync(binDir, { recursive: true, force: true });
+  });
+
+  test('uses the GPU directory for the GPU build', () => {
+    const transcriber = makeTranscriber(true, 'win32');
+    expect(transcriber.isExecutableCached()).toBe(false);
+    const binDir = path.join(tempDir, 'plugin', 'bin-gpu');
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(path.join(binDir, 'whisper-cli.exe'), 'x');
+    expect(transcriber.isExecutableCached()).toBe(true);
+    fs.rmSync(binDir, { recursive: true, force: true });
+  });
+});

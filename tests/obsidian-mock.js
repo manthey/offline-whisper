@@ -56,10 +56,15 @@ window.obsidianMock = (function () {
         },
         setValue(v) {
           dropdown.value = v;
-          return { onChange: () => {} };
+          return dropdown;
         },
         getValue() {
           return dropdown.value;
+        },
+        onChange(fn) {
+          globalThis._capturedDropdowns = globalThis._capturedDropdowns || [];
+          globalThis._capturedDropdowns.push({ dropdown, onChange: fn, value: dropdown.value });
+          return dropdown;
         },
       };
       cb(dropdown);
@@ -71,14 +76,51 @@ window.obsidianMock = (function () {
     }
     addSlider(cb) {
       const slider = {
-        setLimits: (min, max) => ({ setValue: (v) => ({ setDynamicTooltip: () => ({ onChange: () => {} }) }) }),
+        min: 0,
+        max: 100,
         value: 10,
+        setLimits(min, max) {
+          slider.min = min;
+          slider.max = max;
+          return slider;
+        },
+        setValue(v) {
+          slider.value = v;
+          return slider;
+        },
+        setDynamicTooltip() {
+          return slider;
+        },
+        onChange(fn) {
+          globalThis._capturedSliders = globalThis._capturedSliders || [];
+          globalThis._capturedSliders.push({ slider, onChange: fn, value: slider.value });
+          return slider;
+        },
       };
       cb(slider);
       return this;
     }
     addText(cb) {
-      const input = { setPlaceholder: (p) => ({ setValue: (v) => ({ onChange: () => {} }) }) };
+      const input = {
+        placeholder: '',
+        value: '',
+        setPlaceholder(p) {
+          input.placeholder = p;
+          return input;
+        },
+        setValue(v) {
+          input.value = v;
+          return input;
+        },
+        getValue() {
+          return input.value;
+        },
+        onChange(fn) {
+          globalThis._capturedTexts = globalThis._capturedTexts || [];
+          globalThis._capturedTexts.push({ input, onChange: fn, value: input.value });
+          return input;
+        },
+      };
       cb(input);
       const inp = document.createElement('input');
       this.containerEl.appendChild(inp);

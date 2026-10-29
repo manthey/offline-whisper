@@ -108,6 +108,8 @@ class WhisperTranscriptionPlugin extends Plugin {
   nextInsertChunk = 1;
   pendingResults = new Map();
   wakeLock = null;
+  // Number of model or executable downloads currently in progress.
+  downloadCount = 0;
 
   async onload() {
     log('Plugin loading');
@@ -187,6 +189,17 @@ class WhisperTranscriptionPlugin extends Plugin {
     this.wakeLock = null;
   }
 
+  // Run a task while marking a download as in progress, so the cache Check
+  // button can report that assets are not ready while files are arriving.
+  async trackDownload(run) {
+    this.downloadCount++;
+    try {
+      return await run();
+    } finally {
+      this.downloadCount--;
+    }
+  }
+
   async loadModel() {
     if (this.transcriber) {
       log('Model already loaded');
@@ -207,11 +220,13 @@ class WhisperTranscriptionPlugin extends Plugin {
         // here would wrap null.
         const transcriber = new DesktopTranscriber(this, { useGpu: this.settings.computeDevice === 'gpu' });
         this.desktopTranscriber = transcriber;
-        await transcriber.initialize(this.settings.modelId, (progress) => {
-          if (progress.message) {
-            this.showStatus(progress.message, true);
+        await this.trackDownload(() =>
+          transcriber.initialize(this.settings.modelId, (progress) => {
+            if (progress.message) {
+              this.showStatus(progress.message, true);
           }
-        });
+          })
+        );
         this.transcriber = (audioData) => transcriber.transcribe(audioData);
         this.isModelLoading = false;
         log('Desktop transcriber ready');
@@ -257,14 +272,18 @@ class WhisperTranscriptionPlugin extends Plugin {
       }
       let mobilePipeline;
       try {
-        mobilePipeline = await pipeline('automatic-speech-recognition', this.settings.modelId, pipelineOptions);
+        mobilePipeline = await this.trackDownload(() =>
+          pipeline('automatic-speech-recognition', this.settings.modelId, pipelineOptions)
+        );
       } catch (pipelineError) {
         if (!useWebGpu) {
           throw pipelineError;
         }
         log('WebGPU pipeline failed; falling back to WASM', pipelineError);
         delete pipelineOptions.device;
-        mobilePipeline = await pipeline('automatic-speech-recognition', this.settings.modelId, pipelineOptions);
+        mobilePipeline = await this.trackDownload(() =>
+          pipeline('automatic-speech-recognition', this.settings.modelId, pipelineOptions)
+        );
       }
       this.transcriber = mobilePipeline;
       this.isModelLoading = false;
@@ -298,11 +317,13 @@ class WhisperTranscriptionPlugin extends Plugin {
       return this.loadModel();
     }
     const transcriber = new DesktopTranscriber(this, { useGpu: this.settings.computeDevice === 'gpu' });
-    await transcriber.initialize(this.settings.modelId, (progress) => {
-      if (progress.message) {
-        this.showStatus(progress.message, true);
-      }
-    });
+    await this.trackDownload(() =>
+      transcriber.initialize(this.settings.modelId, (progress) => {
+        if (progress.message) {
+          this.showStatus(progress.message, true);
+        }
+      })
+    );
     // Adopt the fresh transcriber only when none is loaded; a loaded one
     // keeps working with the settings it was created with until the next
     // settings change rebuilds it.
@@ -917,17 +938,21 @@ class WhisperSettingTab extends PluginSettingTab {
       );
     new Setting(containerEl)
       .setName('Check model cache')
-      .setDesc('See if the current model is cached for offline use, or download it now')
+      .setDesc('See if the current model and executable are cached for offline use, or download them now')
       .addButton((button) =>
         button
           .setButtonText('Check')
           .onClick(async () => {
+            if (this.plugin.downloadCount > 0) {
+              new Notice('Download in progress - not ready yet');
+              return;
+            }
             let cached;
-            if (!isMobilePlatform && this.plugin.desktopTranscriber) {
-              cached = this.plugin.desktopTranscriber.isModelCached(this.plugin.settings.modelId);
-            } else if (!isMobilePlatform) {
-              const tempTranscriber = new DesktopTranscriber(this.plugin);
-              cached = tempTranscriber.isModelCached(this.plugin.settings.modelId);
+            if (!isMobilePlatform) {
+              const transcriber =
+                this.plugin.desktopTranscriber ||
+                new DesktopTranscriber(this.plugin, { useGpu: this.plugin.settings.computeDevice === 'gpu' });
+              cached = transcriber.isModelCached(this.plugin.settings.modelId) && transcriber.isExecutableCached();
             } else {
               cached = await isModelCached(this.plugin.settings.modelId);
             }
