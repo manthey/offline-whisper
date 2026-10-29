@@ -808,6 +808,12 @@ class WhisperTranscriptionPlugin extends Plugin {
       log('Was not recording');
       return;
     }
+    if (wasCapturing) {
+      // Drain buffered input while isRecording is still true: the guards in
+      // queueAudioInput and handleAudioInput would otherwise discard audio
+      // that had not yet been handed to the segmenter.
+      this.drainPendingInput();
+    }
     this.isRecording = false;
     this.isStopping = true;
     if (this.currentRecorder && this.currentRecorder.state === 'recording') {
@@ -816,9 +822,8 @@ class WhisperTranscriptionPlugin extends Plugin {
     }
     this.currentRecorder = null;
     if (wasCapturing) {
-      // Hand any remaining captured audio to the segmenter, then transcribe
-      // whatever is still buffered when recording ends.
-      this.drainPendingInput();
+      // Transcribe whatever is still buffered in the segmenter when recording
+      // ends.
       if (this.segmenter) {
         const remaining = this.segmenter.flush();
         this.segmenter = null;
