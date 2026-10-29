@@ -38,6 +38,8 @@ jobs:
           EXPECTED_PHRASE: this is a test
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_OPTIONS: '--require ${{ github.workspace }}/tests/patch_header.js'
+      - name: Run cleanup test
+        run: node tests/test_cleanup.js
       - name: Run jest test
         run: npx jest
         env:

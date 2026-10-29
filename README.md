@@ -22,6 +22,14 @@ Navigate to the plugin settings to select a model. Models are downloaded from Hu
 
 The plugin measures how long each transcription takes relative to the length of its audio, over the ten most recent chunks. The "Transcription speed" entry on the settings page reports this ratio and what it means: a ratio above 1 second of transcription per second of audio means the model cannot keep up with speech and the transcription queue will grow while recording, so a smaller, faster model would be advised. A ratio well below 1 suggests a larger, more accurate model may still keep up. Record some audio, then reopen the settings to see the current measurement.
 
+## Text Cleanup
+
+Whisper transcription often contains artifacts: repeated words or phrases ("word whiskers"), hallucinated text during silence, and inconsistent capitalization or punctuation. The optional "Clean up transcription text" setting (desktop only) runs each transcribed chunk through a small local language model before it is inserted into the note. The model removes some artifacts.
+
+This setting is off by default because a language model can occasionally alter text in unfortunate ways. The cleanup result is only used when it is plausible: if the model produces nothing usable, produces text much longer than the input, or produces text that shares no vocabulary with the transcription, the raw transcription is inserted unchanged. If the cleanup engine cannot be started, recording proceeds with unprocessed text.
+
+All downloads come from Hugging Face and GitHub and are stored inside the plugin's directory; after the first download, everything runs entirely offline.
+
 ## GPU Acceleration
 
 The "Compute device" setting offers "GPU if available" as an opt-in alternative to the default CPU on Windows and on mobile devices.

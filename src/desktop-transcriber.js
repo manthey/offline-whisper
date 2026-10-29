@@ -217,7 +217,10 @@ async function getLatestReleaseUrl(archivePattern, repo) {
       };
       makeRequest(url);
     });
-  const findAsset = (releaseInfo) => releaseInfo.assets.find((a) => a.name === archivePattern);
+  const findAsset = (releaseInfo) =>
+    releaseInfo.assets.find((a) =>
+      typeof archivePattern === 'string' ? a.name === archivePattern : archivePattern.test(a.name),
+    );
   const pick = (releaseInfo) => {
     if (releaseInfo.prerelease) {
       log('No stable release contains ' + archivePattern + '; using prerelease ' + releaseInfo.tag_name);
@@ -577,4 +580,4 @@ class DesktopTranscriber {
   }
 }
 
-module.exports = { DesktopTranscriber, getPlatformInfo, parseBackends };
+module.exports = { DesktopTranscriber, getPlatformInfo, parseBackends, getLatestReleaseUrl };

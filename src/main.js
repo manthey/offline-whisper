@@ -4,6 +4,12 @@ let DesktopTranscriber;
 
 const { AudioSegmenter } = require('./audio-segmenter.js');
 const { MobileTranscriberHost } = require('./worker-host.js');
+const { TextCleaner, CLEANUP_MODELS, DEFAULT_CLEANUP_MODEL_ID } = require('./text-cleanup.js');
+const {
+  NativeTextCleaner,
+  DESKTOP_CLEANUP_MODELS,
+  DEFAULT_DESKTOP_CLEANUP_MODEL_ID,
+} = require('./desktop-cleanup.js');
 
 // Allow testing to override platform detection via globalThis.__desktopOverride
 // Set to true in tests to force desktop code path
@@ -72,11 +78,24 @@ async function isModelCached(modelId) {
 
 class WhisperTranscriptionPlugin extends Plugin {
   defaultFilter = '^(?:you|okay)$|^\\[.*\\]$|^\\(.*\\)$';
+
+  // Cleanup runs natively on desktop; it is not offered on mobile, where a
+  // transformers.js model in the WebView process froze the interface.
+  static cleanupModelOptions() {
+    return isMobilePlatform ? CLEANUP_MODELS : DESKTOP_CLEANUP_MODELS;
+  }
+
+  static defaultCleanupModelId() {
+    return isMobilePlatform ? DEFAULT_CLEANUP_MODEL_ID : DEFAULT_DESKTOP_CLEANUP_MODEL_ID;
+  }
+
   settings = {
     modelId: 'onnx-community/whisper-base.en',
     chunkDurationMs: 10000,
     regexFilter: this.defaultFilter,
     computeDevice: 'cpu',
+    cleanupText: false,
+    cleanupModelId: WhisperTranscriptionPlugin.defaultCleanupModelId(),
   };
   transcriber = null;
   desktopTranscriber = null;
@@ -104,6 +123,16 @@ class WhisperTranscriptionPlugin extends Plugin {
   nextInsertChunk = 1;
   pendingResults = new Map();
   wakeLock = null;
+  // Optional cleanup stage: a small local language model that tidies each
+  // transcribed chunk before it is inserted.
+  textCleaner = null;
+  // Set for the rest of the session once loading the cleanup model failed,
+  // so recording continues without cleanup instead of retrying per chunk.
+  cleanupFailed = false;
+  // Raw transcription of the previous chunk, passed to the cleanup model as
+  // context so punctuation and capitalization stay consistent across chunk
+  // boundaries.
+  previousRawChunkText = '';
   // Number of model or executable downloads currently in progress.
   downloadCount = 0;
   // Timing of the most recent transcription chunks, oldest first: each entry
@@ -140,6 +169,10 @@ class WhisperTranscriptionPlugin extends Plugin {
 
   async loadSettings() {
     this.settings = Object.assign({}, this.settings, await this.loadData());
+    // A stored cleanup model may be from a different platform's list.
+    if (!WhisperTranscriptionPlugin.cleanupModelOptions().some((m) => m.id === this.settings.cleanupModelId)) {
+      this.settings.cleanupModelId = WhisperTranscriptionPlugin.defaultCleanupModelId();
+    }
     log('Settings loaded', this.settings);
   }
 
@@ -298,7 +331,12 @@ class WhisperTranscriptionPlugin extends Plugin {
       // On mobile there is no separate binary; the model files are the same
       // for CPU and WebGPU, so an already loaded model means the cache is
       // populated and loadModel returns immediately.
-      return this.loadModel();
+      const loaded = await this.loadModel();
+      if (!loaded) {
+        return false;
+      }
+      await this.downloadCleanupAssets();
+      return true;
     }
     const transcriber = new DesktopTranscriber(this, { useGpu: this.settings.computeDevice === 'gpu' });
     await this.trackDownload(() =>
@@ -316,7 +354,111 @@ class WhisperTranscriptionPlugin extends Plugin {
       this.transcriber = (audioData) => transcriber.transcribe(audioData);
       this.showStatus('Model ready', 2000);
     }
+    await this.downloadCleanupAssets();
     return true;
+  }
+
+  // Download the cleanup model when cleanup is enabled, as part of the
+  // settings page download flow.
+  async downloadCleanupAssets() {
+    if (!this.settings.cleanupText) {
+      return;
+    }
+    if (!(await this.loadCleanupModel())) {
+      new Notice('Cleanup model download failed');
+    }
+  }
+
+  // Reset the cleanup stage after a settings change, allowing a model load
+  // that previously failed to be retried.
+  resetCleanupModel() {
+    if (this.textCleaner && this.textCleaner.dispose) {
+      this.textCleaner.dispose();
+    }
+    this.textCleaner = null;
+    this.cleanupFailed = false;
+  }
+
+  // Whether the cleanup model files are already cached locally.
+  async isCleanupModelCached() {
+    const modelId = this.settings.cleanupModelId;
+    if (isMobilePlatform) {
+      return isModelCached(modelId);
+    }
+    if (!this.textCleaner) {
+      this.textCleaner = new NativeTextCleaner(this);
+    }
+    return this.textCleaner.isCached(modelId);
+  }
+
+  // Load the optional cleanup model. Never blocks recording: on failure it
+  // disables cleanup for the session and reports the reason.
+  async loadCleanupModel() {
+    if (!this.settings.cleanupText) {
+      return true;
+    }
+    if (isMobilePlatform) {
+      // Cleanup requires a native engine process and is not offered on
+      // mobile, where in-process inference froze the interface.
+      log('Text cleanup is not supported on this platform');
+      return false;
+    }
+    if (this.cleanupFailed) {
+      return false;
+    }
+    if (this.textCleaner && this.textCleaner.isReady() && this.textCleaner.modelId === this.settings.cleanupModelId) {
+      return true;
+    }
+    if (this.textCleaner && this.textCleaner.dispose) {
+      this.textCleaner.dispose();
+    }
+    this.textCleaner = new NativeTextCleaner(this);
+    try {
+      const cached = await this.isCleanupModelCached();
+      this.showStatus(`${cached ? 'Loading' : 'Downloading'} cleanup model`, true);
+      log(`${cached ? 'Loading' : 'Downloading'} cleanup model: ${this.settings.cleanupModelId}`);
+      await this.textCleaner.initialize(this.settings.cleanupModelId, (progress) => {
+        if (progress.loaded !== undefined && progress.total) {
+          const pct = Math.round((progress.loaded / progress.total) * 100);
+          const mb = Math.round(progress.loaded / 1024 / 1024);
+          this.showStatus(`${cached ? 'Loading' : 'Downloading'} cleanup model: ${pct}% (${mb}MB)`, true);
+        } else if (progress.message) {
+          this.showStatus(progress.message, true);
+        } else if (progress.status === 'loading') {
+          this.showStatus('Initializing cleanup model', true);
+        }
+      });
+      return true;
+    } catch (error) {
+      log('Cleanup model load FAILED', error);
+      this.cleanupFailed = true;
+      this.showStatus('Cleanup model unavailable; inserting unprocessed text', 5000);
+      return false;
+    }
+  }
+
+  // Run the optional cleanup stage on one transcribed chunk. previousText is
+  // the raw transcription of the preceding chunk, captured before this chunk
+  // was transcribed. Returns the cleaned text, or the raw text unchanged
+  // when cleanup is disabled, unavailable, or untrustworthy, so
+  // transcription never stalls or loses content because of it.
+  async cleanTranscription(text, chunkNum, previousText) {
+    if (!this.settings.cleanupText || !text || !text.trim()) {
+      return text;
+    }
+    if (!this.textCleaner || !this.textCleaner.isReady()) {
+      if (!(await this.loadCleanupModel())) {
+        return text;
+      }
+    }
+    try {
+      const cleaned = await this.textCleaner.clean(text, previousText || '');
+      log(`Chunk #${chunkNum} cleaned text: "${cleaned}"`);
+      return cleaned;
+    } catch (error) {
+      log(`Chunk #${chunkNum} cleanup FAILED`, error);
+      return text;
+    }
   }
 
   async toggleRecording(state) {
@@ -351,9 +493,15 @@ class WhisperTranscriptionPlugin extends Plugin {
     }
     this.targetEditor = view.editor;
     log('Target editor set');
+    this.previousRawChunkText = '';
     if (!(await this.loadModel())) {
       log('Model not available, cannot start');
       return;
+    }
+    if (!(await this.loadCleanupModel())) {
+      // Recording proceeds with unprocessed text when the cleanup model
+      // cannot be loaded.
+      log('Cleanup model unavailable, continuing without cleanup');
     }
     try {
       log('Requesting microphone access');
@@ -633,6 +781,10 @@ class WhisperTranscriptionPlugin extends Plugin {
     if (this.processingCount === 1 && this.isRecording) {
       this.showStatus('Processing speech');
     }
+    // Capture the context before this chunk is transcribed: the raw text of
+    // the preceding chunk, which transcribePreparedAudio replaces with this
+    // chunk's own text.
+    const previousRaw = this.previousRawChunkText;
     let text = '';
     try {
       // Clamp audio to valid range [-1, 1]
@@ -641,6 +793,7 @@ class WhisperTranscriptionPlugin extends Plugin {
         clamped[i] = Math.max(-1, Math.min(1, audioData[i]));
       }
       text = await this.transcribePreparedAudio(clamped, chunkNum);
+      text = await this.cleanTranscription(text, chunkNum, previousRaw);
     } catch (error) {
       log(`Chunk #${chunkNum} transcription FAILED`, error);
       new Notice('Transcription error: ' + error.message);
@@ -674,6 +827,10 @@ class WhisperTranscriptionPlugin extends Plugin {
     log(`Chunk #${chunkNum} transcription complete in ${elapsed}ms`, result);
     const text = result && result.text ? result.text.trim() : '';
     log(`Chunk #${chunkNum} extracted text: "${text}"`);
+    // Keep the raw transcription as context for cleaning the next chunk.
+    if (text) {
+      this.previousRawChunkText = text;
+    }
     return text;
   }
 
@@ -767,6 +924,7 @@ class WhisperTranscriptionPlugin extends Plugin {
     if (this.processingCount === 1 && this.isRecording) {
       this.showStatus('Processing speech');
     }
+    const previousRaw = this.previousRawChunkText;
     try {
       log(`Chunk #${chunkNum} converting blob to arrayBuffer`);
       const arrayBuffer = await audioBlob.arrayBuffer();
@@ -793,7 +951,8 @@ class WhisperTranscriptionPlugin extends Plugin {
       }
       log(`Chunk #${chunkNum} audio ready: ${audioData.length} samples (${(audioData.length / 16000).toFixed(2)}s)`);
       const text = await this.transcribePreparedAudio(audioData, chunkNum);
-      this.queueTranscriptionResult(text, chunkNum);
+      const cleaned = await this.cleanTranscription(text, chunkNum, previousRaw);
+      this.queueTranscriptionResult(cleaned, chunkNum);
     } catch (error) {
       log(`Chunk #${chunkNum} transcription FAILED`, error);
       new Notice('Transcription error: ' + error.message);
@@ -892,6 +1051,10 @@ class WhisperTranscriptionPlugin extends Plugin {
       this.mobileWorkerHost.dispose();
       this.mobileWorkerHost = null;
     }
+    if (this.textCleaner && this.textCleaner.dispose) {
+      this.textCleaner.dispose();
+    }
+    this.textCleaner = null;
   }
 }
 
@@ -1008,6 +1171,37 @@ class WhisperSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+    if (!isMobilePlatform) {
+      new Setting(containerEl)
+        .setName('Clean up transcription text')
+        .setDesc(
+          'Before each transcribed chunk is inserted, run it through a small local language model in a separate process to remove repeated words and transcription artifacts and to fix capitalization and punctuation. Off by default. The cleanup engine and model are downloaded on first use and run entirely offline.'
+        )
+        .addToggle((toggle) =>
+          toggle.setValue(this.plugin.settings.cleanupText).onChange(async (value) => {
+            this.plugin.settings.cleanupText = value;
+            this.plugin.resetCleanupModel();
+            await this.plugin.saveSettings();
+            new Notice(value ? 'Cleanup enabled. The engine starts on next recording.' : 'Cleanup disabled.');
+          })
+        );
+      new Setting(containerEl)
+        .setName('Cleanup model')
+        .setDesc('Model used to clean up transcription text. Smaller = faster. Downloaded on first use.')
+        .addDropdown((dropdown) => {
+          for (const model of WhisperTranscriptionPlugin.cleanupModelOptions()) {
+            dropdown.addOption(model.id, model.label);
+          }
+          return dropdown
+            .setValue(this.plugin.settings.cleanupModelId)
+            .onChange(async (value) => {
+              this.plugin.settings.cleanupModelId = value;
+              this.plugin.resetCleanupModel();
+              await this.plugin.saveSettings();
+              new Notice('Cleanup model changed. New model loads on next recording.');
+            });
+        });
+    }
     new Setting(containerEl)
       .setName('Check model cache')
       .setDesc('See if the current model and executable are cached for offline use, or download them now')
@@ -1029,6 +1223,12 @@ class WhisperSettingTab extends PluginSettingTab {
               cached = await isModelCached(this.plugin.settings.modelId);
             }
             new Notice(cached ? 'Model is cached - offline ready' : 'Model not cached - needs download');
+            if (this.plugin.settings.cleanupText) {
+              const cleanupCached = await this.plugin.isCleanupModelCached();
+              new Notice(
+                cleanupCached ? 'Cleanup model is cached' : 'Cleanup model not cached - needs download'
+              );
+            }
           })
       )
       .addButton((button) =>
@@ -1065,6 +1265,10 @@ class WhisperSettingTab extends PluginSettingTab {
                   this.plugin.desktopTranscriber = new DesktopTranscriber(this.plugin);
                 }
                 this.plugin.desktopTranscriber.clearCache();
+                if (!this.plugin.textCleaner) {
+                  this.plugin.textCleaner = new TextCleaner(this.plugin);
+                }
+                this.plugin.textCleaner.clearCache();
                 new Notice('Cache cleared');
               } else {
                 const cacheNames = await caches.keys();

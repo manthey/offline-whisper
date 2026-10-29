@@ -126,6 +126,29 @@ window.obsidianMock = (function () {
       this.containerEl.appendChild(inp);
       return this;
     }
+    addToggle(cb) {
+      const toggle = {
+        value: false,
+        setValue(v) {
+          toggle.value = v;
+          return toggle;
+        },
+        getValue() {
+          return toggle.value;
+        },
+        onChange(fn) {
+          globalThis._capturedToggles = globalThis._capturedToggles || [];
+          globalThis._capturedToggles.push({ toggle, onChange: fn, value: toggle.value });
+          return toggle;
+        },
+      };
+      cb(toggle);
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = toggle.value;
+      this.containerEl.appendChild(input);
+      return this;
+    }
     removeCta() {}
 
     addButton(cb) {
