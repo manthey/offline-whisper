@@ -722,10 +722,10 @@ describe('WhisperSettingTab model change notifications', () => {
     expect(containerEl.innerHTML).toContain('Download');
   });
 
-  test('Download button calls loadModel and shows offline ready notice', async () => {
+  test('Download button calls downloadOfflineAssets and shows offline ready notice', async () => {
     const { app, plugin } = createPlugin();
     await plugin.loadSettings();
-    const loadModelSpy = jest.spyOn(plugin, 'loadModel').mockResolvedValue(true);
+    const downloadSpy = jest.spyOn(plugin, 'downloadOfflineAssets').mockResolvedValue(true);
     const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
 
     const tab = new WhisperSettingTab(app.asOriginalType__(), plugin);
@@ -740,15 +740,24 @@ describe('WhisperSettingTab model change notifications', () => {
 
     await downloadItem.handler.call(tab);
 
-    expect(loadModelSpy).toHaveBeenCalledTimes(1);
+    expect(downloadSpy).toHaveBeenCalledTimes(1);
     expect(logSpy).toHaveBeenCalledWith('[Notice] Model downloaded - offline ready');
     logSpy.mockRestore();
+  });
+
+  test('downloadOfflineAssets delegates to loadModel on mobile', async () => {
+    const { plugin } = createPlugin();
+    await plugin.loadSettings();
+    const loadModelSpy = jest.spyOn(plugin, 'loadModel').mockResolvedValue(true);
+
+    await expect(plugin.downloadOfflineAssets()).resolves.toBe(true);
+    expect(loadModelSpy).toHaveBeenCalledTimes(1);
   });
 
   test('Download button shows a notice when downloading fails', async () => {
     const { app, plugin } = createPlugin();
     await plugin.loadSettings();
-    jest.spyOn(plugin, 'loadModel').mockRejectedValue(new Error('no network'));
+    jest.spyOn(plugin, 'downloadOfflineAssets').mockRejectedValue(new Error('no network'));
     const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
 
     const tab = new WhisperSettingTab(app.asOriginalType__(), plugin);

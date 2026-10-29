@@ -121,7 +121,7 @@ describe('WhisperSettingTab Target Code (Lines 582-621)', () => {
   test('Download button initializes desktop transcriber to fetch binary and model', async () => {
     clearState();
     const plugin = createMockedPlugin();
-    // Provide an initialize mock so loadModel can complete the download path
+    // Provide an initialize mock so downloadOfflineAssets can complete the download path
     const dtcModule = require('../src/desktop-transcriber.js');
     const initialize = jest.fn().mockResolvedValue(undefined);
     dtcModule.DesktopTranscriber.mockImplementation(() => ({
@@ -144,6 +144,87 @@ describe('WhisperSettingTab Target Code (Lines 582-621)', () => {
     expect(initialize).toHaveBeenCalledWith('onnx-community/whisper-base.en', expect.any(Function));
     expect(logSpy).toHaveBeenCalledWith('[Notice] Model downloaded - offline ready');
     logSpy.mockRestore();
+  });
+
+  test('Download still verifies the current device when a model is already loaded', async () => {
+    // Regression: with a loaded transcriber, the earlier loadModel-based
+    // button returned early and never downloaded the GPU binary after the
+    // compute device was changed.
+    clearState();
+    const plugin = createMockedPlugin();
+    const loadedTranscriber = jest.fn();
+    plugin.transcriber = loadedTranscriber;
+    const dtcModule = require('../src/desktop-transcriber.js');
+    const initialize = jest.fn().mockResolvedValue(undefined);
+    dtcModule.DesktopTranscriber.mockImplementation(() => ({
+      isModelCached: jest.fn(),
+      clearCache: jest.fn(),
+      initialize,
+    }));
+
+    const tab = new WhisperSettingTab({}, plugin);
+    Object.defineProperty(tab, 'containerEl', { value: makeObsidianContainer(), writable: true });
+
+    await tab.display();
+
+    const downloadItem = getCapturedHandlers().find((h) => h.btn.containerEl.textContent === 'Download');
+    await downloadItem.handler.call(tab);
+
+    expect(initialize).toHaveBeenCalled();
+    // The already loaded transcriber is left in place.
+    expect(plugin.transcriber).toBe(loadedTranscriber);
+    expect(initialize).toHaveBeenCalledTimes(1);
+  });
+
+  test('Download adopts the fresh transcriber when none is loaded', async () => {
+    clearState();
+    const plugin = createMockedPlugin();
+    const dtcModule = require('../src/desktop-transcriber.js');
+    const instance = {
+      isModelCached: jest.fn(),
+      clearCache: jest.fn(),
+      initialize: jest.fn().mockResolvedValue(undefined),
+      transcribe: jest.fn(() => ({ text: 'hi' })),
+    };
+    dtcModule.DesktopTranscriber.mockImplementation(() => instance);
+
+    const tab = new WhisperSettingTab({}, plugin);
+    Object.defineProperty(tab, 'containerEl', { value: makeObsidianContainer(), writable: true });
+
+    await tab.display();
+
+    const downloadItem = getCapturedHandlers().find((h) => h.btn.containerEl.textContent === 'Download');
+    await downloadItem.handler.call(tab);
+
+    expect(plugin.transcriber).toBeInstanceOf(Function);
+    expect(plugin.desktopTranscriber).toBe(instance);
+    // The adopted wrapper routes audio to the new transcriber.
+    await plugin.transcriber(new Float32Array(16));
+    expect(instance.transcribe).toHaveBeenCalled();
+  });
+
+  test('loadModel keeps the transcriber working when it is cleared during initialization', async () => {
+    // Regression: changing the compute device mid-download nulls
+    // plugin.desktopTranscriber; the wrapper created afterwards must still
+    // point at the instance that was initialized.
+    clearState();
+    const plugin = createMockedPlugin();
+    const dtcModule = require('../src/desktop-transcriber.js');
+    const instance = {
+      isModelCached: jest.fn(),
+      clearCache: jest.fn(),
+      transcribe: jest.fn(async () => ({ text: 'hi' })),
+      initialize: jest.fn(async () => {
+        // Simulate the settings handler nulling the property mid-download.
+        plugin.desktopTranscriber = null;
+      }),
+    };
+    dtcModule.DesktopTranscriber.mockImplementation(() => instance);
+
+    const success = await plugin.loadModel();
+    expect(success).toBe(true);
+    expect(plugin.desktopTranscriber).toBe(null);
+    await expect(plugin.transcriber(new Float32Array(16))).resolves.toEqual({ text: 'hi' });
   });
 
   test('display() populates critical UI elements in desktop mode', async () => {

@@ -201,13 +201,18 @@ class WhisperTranscriptionPlugin extends Plugin {
     try {
       // Desktop path: use whisper.cpp
       if (!isMobilePlatform) {
-        this.desktopTranscriber = new DesktopTranscriber(this, { useGpu: this.settings.computeDevice === 'gpu' });
-        await this.desktopTranscriber.initialize(this.settings.modelId, (progress) => {
+        // Bind the wrapper to a local reference: the settings handlers null
+        // this.desktopTranscriber when the device or model changes, which can
+        // happen while initialize() is awaiting, and re-reading the property
+        // here would wrap null.
+        const transcriber = new DesktopTranscriber(this, { useGpu: this.settings.computeDevice === 'gpu' });
+        this.desktopTranscriber = transcriber;
+        await transcriber.initialize(this.settings.modelId, (progress) => {
           if (progress.message) {
             this.showStatus(progress.message, true);
           }
         });
-        this.transcriber = (audioData) => this.desktopTranscriber.transcribe(audioData);
+        this.transcriber = (audioData) => transcriber.transcribe(audioData);
         this.isModelLoading = false;
         log('Desktop transcriber ready');
         this.showStatus('Model ready', 2000);
@@ -277,6 +282,36 @@ class WhisperTranscriptionPlugin extends Plugin {
       }
       return false;
     }
+  }
+
+  // Download whatever is missing for offline use with the current settings:
+  // the whisper.cpp binary (CPU or GPU) and the model on desktop, or the
+  // transformers.js model on mobile. Unlike loadModel, this never treats an
+  // already loaded model as done: a loaded transcriber may predate a settings
+  // change (for example switching the compute device mid-download), so the
+  // current settings are always verified against the cache.
+  async downloadOfflineAssets() {
+    if (isMobilePlatform) {
+      // On mobile there is no separate binary; the model files are the same
+      // for CPU and WebGPU, so an already loaded model means the cache is
+      // populated and loadModel returns immediately.
+      return this.loadModel();
+    }
+    const transcriber = new DesktopTranscriber(this, { useGpu: this.settings.computeDevice === 'gpu' });
+    await transcriber.initialize(this.settings.modelId, (progress) => {
+      if (progress.message) {
+        this.showStatus(progress.message, true);
+      }
+    });
+    // Adopt the fresh transcriber only when none is loaded; a loaded one
+    // keeps working with the settings it was created with until the next
+    // settings change rebuilds it.
+    if (!this.transcriber) {
+      this.desktopTranscriber = transcriber;
+      this.transcriber = (audioData) => transcriber.transcribe(audioData);
+      this.showStatus('Model ready', 2000);
+    }
+    return true;
   }
 
   async toggleRecording(state) {
@@ -905,11 +940,8 @@ class WhisperSettingTab extends PluginSettingTab {
           .onClick(async () => {
             button.setDisabled(true);
             try {
-              // Downloads whatever is missing for offline use with the current
-              // settings: the whisper.cpp binary (CPU or GPU) and the model on
-              // desktop, or the transformers.js model on mobile. Progress is
-              // shown via status notices from loadModel.
-              const success = await this.plugin.loadModel();
+              // Progress is shown via status notices during the download.
+              const success = await this.plugin.downloadOfflineAssets();
               if (success) {
                 new Notice('Model downloaded - offline ready');
               }
