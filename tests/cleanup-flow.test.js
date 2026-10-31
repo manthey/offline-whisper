@@ -215,7 +215,7 @@ describe('cleanup settings on mobile', () => {
     logSpy.mockRestore();
   });
 
-  test('the settings page does not offer cleanup settings on mobile', async () => {
+  test('the settings page offers the cleanup toggle on mobile', async () => {
     globalThis._capturedToggles = [];
     globalThis._capturedDropdowns = [];
     const el = document.createElement('div');
@@ -231,6 +231,14 @@ describe('cleanup settings on mobile', () => {
     const tab = new WhisperSettingTab(app.asOriginalType__(), plugin);
     tab.containerEl = el;
     tab.display();
-    expect(globalThis._capturedToggles).toHaveLength(0);
+    // Cleanup runs in the transcription worker on mobile, so the setting is
+    // offered here just as on desktop, with the transformers.js model list.
+    expect(globalThis._capturedToggles).toHaveLength(1);
+    expect(globalThis._capturedToggles[0].value).toBe(false);
+    const cleanupDropdowns = globalThis._capturedDropdowns.filter(
+      (d) => d.value === 'onnx-community/Qwen2.5-0.5B-Instruct',
+    );
+    expect(cleanupDropdowns).toHaveLength(1);
+    expect(cleanupDropdowns[0].dropdown['onnx-community/Qwen2.5-1.5B-Instruct']).toContain('Qwen 2.5 1.5B');
   });
 });

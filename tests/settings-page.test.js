@@ -36,6 +36,7 @@ async function displayTab(app, plugin) {
   globalThis._capturedDropdowns = [];
   globalThis._capturedSliders = [];
   globalThis._capturedTexts = [];
+  globalThis._capturedToggles = [];
   const tab = new WhisperSettingTab(app.asOriginalType__(), plugin);
   const containerEl = makeContainer();
   tab.containerEl = containerEl;
@@ -71,6 +72,8 @@ describe('WhisperSettingTab (mobile)', () => {
       'Compute device',
       'Chunk duration (seconds)',
       'Regex Filter',
+      'Clean up transcription text',
+      'Cleanup model',
       'Check model cache',
       'Clear Caches',
     ]) {
@@ -244,5 +247,33 @@ describe('WhisperSettingTab (mobile)', () => {
 
     expect(logSpy).toHaveBeenCalledWith('[Notice] Failed to clear cache: storage unavailable');
     logSpy.mockRestore();
+  });
+
+  test('the cleanup toggle and model dropdown are offered on mobile', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.loadSettings();
+    await displayTab(app, plugin);
+    // The cleanup model runs in the transcription worker on mobile, so the
+    // settings are shown here just as on desktop.
+    expect(globalThis._capturedToggles).toHaveLength(1);
+    expect(globalThis._capturedToggles[0].value).toBe(false);
+    const cleanupDropdowns = globalThis._capturedDropdowns.filter(
+      (d) => d.value === 'onnx-community/Qwen2.5-0.5B-Instruct',
+    );
+    expect(cleanupDropdowns).toHaveLength(1);
+    const dropdown = cleanupDropdowns[0].dropdown;
+    expect(dropdown['onnx-community/Qwen2.5-0.5B-Instruct']).toContain('Qwen 2.5 0.5B');
+    expect(dropdown['onnx-community/Qwen2.5-1.5B-Instruct']).toContain('Qwen 2.5 1.5B');
+  });
+
+  test('enabling cleanup on mobile saves the setting and resets the model', async () => {
+    const { app, plugin } = createPlugin();
+    await plugin.loadSettings();
+    const saveSpy = jest.spyOn(plugin, 'saveData').mockResolvedValue(undefined);
+    await displayTab(app, plugin);
+    const toggleEntry = globalThis._capturedToggles[0];
+    await toggleEntry.onChange(true);
+    expect(plugin.settings.cleanupText).toBe(true);
+    expect(saveSpy).toHaveBeenCalled();
   });
 });

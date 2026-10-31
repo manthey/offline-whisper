@@ -1216,37 +1216,35 @@ class WhisperSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-    if (!isMobilePlatform) {
-      new Setting(containerEl)
-        .setName('Clean up transcription text')
-        .setDesc(
-          'Before each transcribed chunk is inserted, run it through a small local language model in the background to remove repeated words and transcription artifacts and to fix capitalization and punctuation. Off by default. The cleanup engine and model are downloaded on first use and run entirely offline.'
-        )
-        .addToggle((toggle) =>
-          toggle.setValue(this.plugin.settings.cleanupText).onChange(async (value) => {
-            this.plugin.settings.cleanupText = value;
+    new Setting(containerEl)
+      .setName('Clean up transcription text')
+      .setDesc(
+        'Before each transcribed chunk is inserted, run it through a small local language model in the background to remove repeated words and transcription artifacts and to fix capitalization and punctuation. Off by default. The cleanup engine and model are downloaded on first use and run entirely offline.'
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.cleanupText).onChange(async (value) => {
+          this.plugin.settings.cleanupText = value;
+          this.plugin.resetCleanupModel();
+          await this.plugin.saveSettings();
+          new Notice(value ? 'Cleanup enabled. The engine starts on next recording.' : 'Cleanup disabled.');
+        })
+      );
+    new Setting(containerEl)
+      .setName('Cleanup model')
+      .setDesc('Model used to clean up transcription text. Smaller = faster. Downloaded on first use.')
+      .addDropdown((dropdown) => {
+        for (const model of WhisperTranscriptionPlugin.cleanupModelOptions()) {
+          dropdown.addOption(model.id, model.label);
+        }
+        return dropdown
+          .setValue(this.plugin.settings.cleanupModelId)
+          .onChange(async (value) => {
+            this.plugin.settings.cleanupModelId = value;
             this.plugin.resetCleanupModel();
             await this.plugin.saveSettings();
-            new Notice(value ? 'Cleanup enabled. The engine starts on next recording.' : 'Cleanup disabled.');
-          })
-        );
-      new Setting(containerEl)
-        .setName('Cleanup model')
-        .setDesc('Model used to clean up transcription text. Smaller = faster. Downloaded on first use.')
-        .addDropdown((dropdown) => {
-          for (const model of WhisperTranscriptionPlugin.cleanupModelOptions()) {
-            dropdown.addOption(model.id, model.label);
-          }
-          return dropdown
-            .setValue(this.plugin.settings.cleanupModelId)
-            .onChange(async (value) => {
-              this.plugin.settings.cleanupModelId = value;
-              this.plugin.resetCleanupModel();
-              await this.plugin.saveSettings();
-              new Notice('Cleanup model changed. New model loads on next recording.');
-            });
-        });
-    }
+            new Notice('Cleanup model changed. New model loads on next recording.');
+          });
+      });
     new Setting(containerEl)
       .setName('Check model cache')
       .setDesc('See if the current model and executable are cached for offline use, or download them now')

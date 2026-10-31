@@ -262,7 +262,7 @@ describe('desktop file-system cache', () => {
 
 describe('cleanup helpers', () => {
   test('CLEANUP_MODELS offers the Qwen 0.5B and 1.5B models', () => {
-    expect(CLEANUP_MODELS.map(([id]) => id)).toEqual([
+    expect(CLEANUP_MODELS.map((model) => model.id)).toEqual([
       'onnx-community/Qwen2.5-0.5B-Instruct',
       'onnx-community/Qwen2.5-1.5B-Instruct',
     ]);
