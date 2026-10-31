@@ -1,3 +1,5 @@
+globalThis.require = require;
+
 const { App } = require('obsidian-test-mocks/obsidian');
 const transformersMock = require('@huggingface/transformers');
 const WhisperTranscriptionPlugin = require('../src/main.js');
@@ -87,10 +89,27 @@ describe('transcription text cleanup', () => {
     await expect(plugin.cleanTranscription('raw text', 1)).resolves.toBe('raw text');
   });
 
-  test('cleanup is not supported on mobile, even with a stale enabled setting', async () => {
+  test('loads the cleanup model through the worker on mobile', async () => {
     plugin.settings.cleanupText = true;
-    await expect(plugin.loadCleanupModel()).resolves.toBe(false);
-    expect(transformersMock.pipeline.calls.filter((call) => call.task === 'text-generation')).toHaveLength(0);
+    await expect(plugin.loadCleanupModel()).resolves.toBe(true);
+    // The cleanup model is a text-generation pipeline hosted in the
+    // transcription worker, which runs in-process in this environment.
+    expect(transformersMock.pipeline.calls.filter((call) => call.task === 'text-generation')).toHaveLength(1);
+    expect(plugin.textCleaner.isReady()).toBe(true);
+  });
+
+  test('cleans transcribed chunks through the worker on mobile', async () => {
+    plugin.settings.cleanupText = true;
+    await plugin.loadCleanupModel();
+    plugin.transcriber = jest.fn(() => Promise.resolve({ text: 'the the raw text' }));
+    plugin.targetEditor = makeEditor();
+    transformersMock.pipeline.textReply = '{"cleaned": "the raw text"}';
+    try {
+      await plugin.transcribeAudioData(new Float32Array(100), 1);
+      expect(plugin.targetEditor.inserted).toEqual(['the raw text ']);
+    } finally {
+      transformersMock.pipeline.textReply = null;
+    }
   });
 
   test('inserts cleaned text into the editor', async () => {

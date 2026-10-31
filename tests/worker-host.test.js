@@ -135,26 +135,64 @@ describe('MobileTranscriberHost (in-process protocol)', () => {
     logSpy.mockRestore();
   });
 
-  test('requests are serialized in arrival order', async () => {
+  test('cleanup requests fail cleanly when the cleanup model is not loaded', async () => {
+    const logSpy = silenceLogs();
+    const host = new MobileTranscriberHost();
+    await expect(host.cleanup('raw text', '')).rejects.toThrow('Cleanup model is not loaded');
+    host.dispose();
+    logSpy.mockRestore();
+  });
+
+  test('cleanup model loads and cleans through the worker protocol', async () => {
+    const logSpy = silenceLogs();
+    const host = new MobileTranscriberHost();
+    const events = [];
+    await host.loadCleanupModel('onnx-community/Qwen2.5-0.5B-Instruct', (progress) => events.push(progress));
+    expect(transformersMock.pipeline.calls.filter((call) => call.task === 'text-generation')).toHaveLength(1);
+    transformersMock.pipeline.textReply = '{"cleaned": "the cleaned text"}';
+    try {
+      await expect(host.cleanup('the the um cleaned text', 'earlier chunk')).resolves.toEqual({
+        cleaned: 'the cleaned text',
+      });
+    } finally {
+      transformersMock.pipeline.textReply = null;
+    }
+    // A second load with the same model reuses the loaded cleaner.
+    await host.loadCleanupModel('onnx-community/Qwen2.5-0.5B-Instruct');
+    expect(transformersMock.pipeline.calls.filter((call) => call.task === 'text-generation')).toHaveLength(1);
+    host.dispose();
+    logSpy.mockRestore();
+  });
+
+  test('cleanup and transcription requests run on independent queues', async () => {
     const logSpy = silenceLogs();
     const host = new MobileTranscriberHost();
     const order = [];
     const original = transformersMock.pipeline;
-    transformersMock.pipeline = jest.fn(async () => {
-      return async (audio) => {
-        // Each transcription takes one macrotask: if requests overlapped, the
-        // second would finish first and reverse the order.
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        order.push('transcribed ' + audio.length);
-        return { text: 'chunk' };
+    transformersMock.pipeline = jest.fn(async (task) => {
+      if (task === 'text-generation') {
+        return async () => {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          order.push('cleanup');
+          return [{ generated_text: [{ role: 'assistant', content: '{"cleaned": "x"}' }] }];
+        };
+      }
+      return async () => {
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        order.push('transcribe');
+        return { text: 'asr' };
       };
     });
     try {
       await host.load('m', false);
-      const first = host.transcribe(new Float32Array(10));
-      const second = host.transcribe(new Float32Array(20));
-      await Promise.all([first, second]);
-      expect(order).toEqual(['transcribed 10', 'transcribed 20']);
+      const asr = host.transcribe(new Float32Array(10));
+      await host.loadCleanupModel('c');
+      const cleaning = host.cleanup('x x', '');
+      await Promise.all([asr, cleaning]);
+      // The cleanup finished before the transcription even though it was
+      // requested after it: on a single shared queue it would have had to
+      // wait the full 15ms transcription.
+      expect(order).toEqual(['cleanup', 'transcribe']);
     } finally {
       transformersMock.pipeline = original;
     }

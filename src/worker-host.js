@@ -166,6 +166,18 @@ class MobileTranscriberHost {
     return await this.request('transcribe', { audio: audioData });
   }
 
+  // Load the cleanup model hosted in the same worker as transcription.
+  loadCleanupModel(modelId, onProgress) {
+    return this.request('cleanup-load', { modelId }, onProgress);
+  }
+
+  // Clean one transcribed chunk. previousText is the raw text of the
+  // preceding chunk, passed to the model as context. Resolves with
+  // { cleaned }.
+  cleanup(text, previousText) {
+    return this.request('cleanup', { text, previousText });
+  }
+
   dispose() {
     this.disposed = true;
     this.terminateWorker();

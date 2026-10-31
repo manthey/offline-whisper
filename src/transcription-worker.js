@@ -12,6 +12,7 @@
 // the plugin context, where no Obsidian module exists.
 
 const transformers = require('@huggingface/transformers');
+const { TextCleaner } = require('./text-cleanup.js');
 
 transformers.env.useBrowserCache = true;
 transformers.env.allowLocalModels = false;
@@ -34,6 +35,10 @@ function createWorkerApi() {
   // protocol.
   let asrPipeline = null;
   let loadedModelId = null;
+  // The optional cleanup model, hosted in the same worker so both models run
+  // off the main thread. Cleanup requests use their own queue: cleaning one
+  // chunk overlaps with transcribing the next instead of waiting behind it.
+  let textCleaner = null;
 
   // GPU acceleration uses WebGPU when the environment provides it; any
   // failure (unsupported browser, driver issues, out of memory) falls back to
@@ -63,15 +68,17 @@ function createWorkerApi() {
     }
   }
 
-  // Requests are handled one at a time, in arrival order. This mirrors how a
-  // worker processes queued messages and keeps a slow transcription from
-  // interleaving with a load of a different model.
-  let handlerChain = Promise.resolve();
+  // Requests are handled one at a time, in arrival order, per model family:
+  // transcription requests wait for each other, cleanup requests wait for
+  // each other, and the two queues run independently so a cleanup pass does
+  // not delay the next transcription.
+  const chains = { asr: Promise.resolve(), cleanup: Promise.resolve() };
+  const handlerChains = { load: 'asr', transcribe: 'asr', 'cleanup-load': 'cleanup', cleanup: 'cleanup' };
 
-  function serialize(task) {
+  function serialize(chainHolder, name, task) {
     const run = () => task();
-    handlerChain = handlerChain.then(run, run);
-    return handlerChain;
+    chainHolder[name] = chainHolder[name].then(run, run);
+    return chainHolder[name];
   }
 
   const handlers = {
@@ -93,13 +100,33 @@ function createWorkerApi() {
       }
       return { text: result && result.text ? result.text : '' };
     },
+
+    async 'cleanup-load'(payload, emitProgress) {
+      if (textCleaner && textCleaner.isReady() && textCleaner.modelId === payload.modelId) {
+        return { modelId: payload.modelId };
+      }
+      // The plugin instance is only needed for the desktop file-system cache,
+      // which is not used inside the worker; the browser cache applies.
+      textCleaner = new TextCleaner(null, {});
+      await textCleaner.initialize(payload.modelId, emitProgress);
+      log(`Cleanup model loaded: ${payload.modelId}`);
+      return { modelId: payload.modelId };
+    },
+
+    async cleanup(payload) {
+      if (!textCleaner || !textCleaner.isReady()) {
+        throw new Error('Cleanup model is not loaded');
+      }
+      const cleaned = await textCleaner.clean(payload.text, payload.previousText || '');
+      return { cleaned };
+    },
   };
 
   // Handle one host request. Every reply carries the request id so the host
   // can route it; progress events may arrive any number of times before the
   // final result or error.
   function handleMessage(message, post) {
-    return serialize(async () => {
+    return serialize(chains, handlerChains[message.type] || 'asr', async () => {
       const handler = handlers[message.type];
       if (!handler) {
         post({ id: message.id, type: 'error', payload: { message: `Unknown request type: ${message.type}` } });

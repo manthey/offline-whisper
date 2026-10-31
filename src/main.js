@@ -76,6 +76,40 @@ async function isModelCached(modelId) {
   }
 }
 
+// Worker-backed text cleaner for mobile: implements the same interface as
+// NativeTextCleaner (isReady, modelId, initialize, clean, dispose) but routes
+// every request through the transcription worker, so the cleanup model runs
+// off the main thread.
+class WorkerTextCleaner {
+  constructor(host, modelId) {
+    this.host = host;
+    this.modelId = modelId;
+    this.ready = false;
+  }
+
+  isReady() {
+    return this.ready;
+  }
+
+  async initialize(modelId, progressCallback) {
+    this.modelId = modelId;
+    await this.host.loadCleanupModel(modelId, progressCallback);
+    this.ready = true;
+  }
+
+  async clean(rawText, previousText) {
+    const result = await this.host.cleanup(rawText, previousText);
+    return result.cleaned;
+  }
+
+  // The worker keeps the loaded model; the next cleanup-load with the same
+  // model id reuses it, so a settings change away and back does not
+  // re-download the model.
+  dispose() {
+    this.ready = false;
+  }
+}
+
 class WhisperTranscriptionPlugin extends Plugin {
   defaultFilter = '^(?:you|okay)$|^\\[.*\\]$|^\\(.*\\)$';
 
@@ -286,7 +320,7 @@ class WhisperTranscriptionPlugin extends Plugin {
       if (useWebGpu) {
         log('Requesting WebGPU for transcription');
       }
-      const host = this.mobileWorkerHost || (this.mobileWorkerHost = new MobileTranscriberHost());
+      const host = this.mobileTranscriberHost();
       await this.trackDownload(() =>
         host.load(this.settings.modelId, useWebGpu, (progress) => {
           if (progress.status === 'downloading' || progress.status === 'progress') {
@@ -380,6 +414,15 @@ class WhisperTranscriptionPlugin extends Plugin {
   }
 
   // Whether the cleanup model files are already cached locally.
+  // The web worker hosting the mobile transformers.js models: transcription
+  // and (when enabled) text cleanup. Created on first use.
+  mobileTranscriberHost() {
+    if (!this.mobileWorkerHost) {
+      this.mobileWorkerHost = new MobileTranscriberHost();
+    }
+    return this.mobileWorkerHost;
+  }
+
   async isCleanupModelCached() {
     const modelId = this.settings.cleanupModelId;
     if (isMobilePlatform) {
@@ -397,12 +440,6 @@ class WhisperTranscriptionPlugin extends Plugin {
     if (!this.settings.cleanupText) {
       return true;
     }
-    if (isMobilePlatform) {
-      // Cleanup requires a native engine process and is not offered on
-      // mobile, where in-process inference froze the interface.
-      log('Text cleanup is not supported on this platform');
-      return false;
-    }
     if (this.cleanupFailed) {
       return false;
     }
@@ -412,7 +449,14 @@ class WhisperTranscriptionPlugin extends Plugin {
     if (this.textCleaner && this.textCleaner.dispose) {
       this.textCleaner.dispose();
     }
-    this.textCleaner = new NativeTextCleaner(this);
+    if (isMobilePlatform) {
+      // The cleanup model runs in the same web worker as transcription, so
+      // generation never blocks the main thread: this is the mobile analogue
+      // of the desktop llama-server process.
+      this.textCleaner = new WorkerTextCleaner(this.mobileTranscriberHost(), this.settings.cleanupModelId);
+    } else {
+      this.textCleaner = new NativeTextCleaner(this);
+    }
     try {
       const cached = await this.isCleanupModelCached();
       this.showStatus(`${cached ? 'Loading' : 'Downloading'} cleanup model`, true);
@@ -1175,7 +1219,7 @@ class WhisperSettingTab extends PluginSettingTab {
       new Setting(containerEl)
         .setName('Clean up transcription text')
         .setDesc(
-          'Before each transcribed chunk is inserted, run it through a small local language model in a separate process to remove repeated words and transcription artifacts and to fix capitalization and punctuation. Off by default. The cleanup engine and model are downloaded on first use and run entirely offline.'
+          'Before each transcribed chunk is inserted, run it through a small local language model in the background to remove repeated words and transcription artifacts and to fix capitalization and punctuation. Off by default. The cleanup engine and model are downloaded on first use and run entirely offline.'
         )
         .addToggle((toggle) =>
           toggle.setValue(this.plugin.settings.cleanupText).onChange(async (value) => {
