@@ -1,6 +1,6 @@
 {
   "name": "offline-whisper",
-  "version": "0.0.0",
+  "version": "1.2.1",
   "scripts": {
     "build": "node build.js",
     "format": "prettier -w manifest.json package.json src/*.js tests/*.js",
