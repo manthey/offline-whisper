@@ -26,13 +26,9 @@ function removeArtifacts(text) {
   return (text || '').replace(ARTIFACT_SEGMENT_PATTERN, ' ').replace(/\s+/g, ' ').trim();
 }
 
-// Models offered for cleanup, as [modelId, label] pairs. All are small
-// instruct-tuned models exported to ONNX for transformers.js.
-const CLEANUP_MODELS = [
-  ['onnx-community/Qwen2.5-0.5B-Instruct', 'Qwen 2.5 0.5B (smaller, faster)'],
-  ['onnx-community/Qwen2.5-1.5B-Instruct', 'Qwen 2.5 1.5B (more accurate, slower)'],
-];
-const DEFAULT_CLEANUP_MODEL_ID = 'onnx-community/Qwen2.5-0.5B-Instruct';
+// Models offered for cleanup are shared with the settings page via
+// cleanup-models.js, which carries no model-loading code.
+const { CLEANUP_MODELS, DEFAULT_CLEANUP_MODEL_ID } = require('./cleanup-models.js');
 
 function log(message, data) {
   const timestamp = new Date().toISOString().substr(11, 12);

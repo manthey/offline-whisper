@@ -37,6 +37,12 @@ async function build() {
     platform: 'browser',
     target: 'es2020',
     external: ['obsidian'],
+    // The main thread never runs transformers.js inference: mobile inference
+    // happens inside the embedded worker bundle above, and desktop cleanup
+    // uses the llama-server process. Substituting a stub here keeps a second
+    // copy of the library out of main.js; the one main-thread consumer (the
+    // desktop Clear Cache handler) only clears a cache directory.
+    alias: { '@huggingface/transformers': './stub-transformers.js' },
     minify: false,
     sourcemap: coverage ? 'inline' : false,
     sourcesContent: true,

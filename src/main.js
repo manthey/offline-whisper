@@ -4,7 +4,8 @@ let DesktopTranscriber;
 
 const { AudioSegmenter } = require('./audio-segmenter.js');
 const { MobileTranscriberHost } = require('./worker-host.js');
-const { TextCleaner, CLEANUP_MODELS, DEFAULT_CLEANUP_MODEL_ID } = require('./text-cleanup.js');
+const { CLEANUP_MODELS, DEFAULT_CLEANUP_MODEL_ID } = require('./cleanup-models.js');
+const { TextCleaner } = require('./text-cleanup.js');
 const {
   NativeTextCleaner,
   DESKTOP_CLEANUP_MODELS,
