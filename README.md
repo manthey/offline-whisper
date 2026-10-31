@@ -12,7 +12,7 @@ The plugin uses different underlying engines to ensure performance and compatibi
 
 On desktop operating systems (Windows, MacOS, Linux), the plugin utilizes `whisper.cpp`. One first use, the appropriate `whisper.cpp` command-line binary is downloaded for the operating system.
 
-On mobile operating systems (Android, iOS), the plugin utilizes a bundled version of transformers.js that runs via WebAssembly.
+On mobile operating systems (Android, iOS), the plugin utilizes a bundled version of transformers.js that runs via WebAssembly. Both the transcription model and the optional text cleanup model run in a web worker, so inference never blocks the editor's main thread.
 
 ## Model Selection
 
