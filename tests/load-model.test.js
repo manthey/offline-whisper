@@ -1,3 +1,7 @@
+// The in-process transcription worker host resolves modules dynamically, so
+// require must be reachable from Function-created code (see worker-host.js).
+globalThis.require = require;
+
 const { App } = require('obsidian-test-mocks/obsidian');
 const transformersMock = require('@huggingface/transformers');
 

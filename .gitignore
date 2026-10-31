@@ -3,3 +3,4 @@ node_modules
 .nyc_output
 coverage
 patch.txt
+src/generated-worker-source.js
