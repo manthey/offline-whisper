@@ -1,8 +1,9 @@
 const { Plugin, Notice, PluginSettingTab, Setting, MarkdownView, setIcon } = require('obsidian');
 
-let pipeline, env, DesktopTranscriber;
+let DesktopTranscriber;
 
 const { AudioSegmenter } = require('./audio-segmenter.js');
+const { MobileTranscriberHost } = require('./worker-host.js');
 
 // Allow testing to override platform detection via globalThis.__desktopOverride
 // Set to true in tests to force desktop code path
@@ -14,13 +15,7 @@ const isMobilePlatform = _platformOverride !== undefined ? !_platformOverride : 
 // hidden there.
 const isWindowsDesktop = !isMobilePlatform && typeof process !== 'undefined' && process.platform === 'win32';
 
-if (isMobilePlatform) {
-  const transformers = require('@huggingface/transformers');
-  pipeline = transformers.pipeline;
-  env = transformers.env;
-  env.useBrowserCache = true;
-  env.allowLocalModels = false;
-} else {
+if (!isMobilePlatform) {
   const desktopModule = require('./desktop-transcriber.js');
   DesktopTranscriber = desktopModule.DesktopTranscriber;
 }
@@ -97,6 +92,7 @@ class WhisperTranscriptionPlugin extends Plugin {
   captureSampleRate = 16000;
   segmenter = null;
   transcriptionChain = Promise.resolve();
+  mobileWorkerHost = null;
   pendingInput = [];
   pendingInputLength = 0;
   targetEditor = null;
@@ -236,7 +232,11 @@ class WhisperTranscriptionPlugin extends Plugin {
         this.showStatus('Model ready', 2000);
         return true;
       }
-      // Mobile path: use transformers.js
+      // Mobile path: transformers.js runs inside a dedicated web worker, so
+      // inference never blocks the WebView main thread: the editor stays
+      // responsive while a chunk is transcribed, and a chunk can be
+      // transcribed while the next one is being captured. The worker source
+      // is embedded in the plugin bundle and started from a blob URL.
       const cached = await isModelCached(this.settings.modelId);
       if (cached) {
         this.showStatus('Loading model from cache', true);
@@ -245,12 +245,17 @@ class WhisperTranscriptionPlugin extends Plugin {
         this.showStatus(`Downloading model: ${this.settings.modelId}. This only happens once.`, true);
         log('Downloading model (online required)');
       }
-      const pipelineOptions = {
-        dtype: {
-          encoder_model: 'fp32',
-          decoder_model_merged: 'q4',
-        },
-        progress_callback: (progress) => {
+      // GPU acceleration on mobile uses WebGPU when the browser provides it.
+      // The worker falls back to the CPU (WASM) path automatically when
+      // WebGPU is unsupported or fails.
+      const useWebGpu =
+        this.settings.computeDevice === 'gpu' && typeof navigator !== 'undefined' && !!navigator.gpu;
+      if (useWebGpu) {
+        log('Requesting WebGPU for transcription');
+      }
+      const host = this.mobileWorkerHost || (this.mobileWorkerHost = new MobileTranscriberHost());
+      await this.trackDownload(() =>
+        host.load(this.settings.modelId, useWebGpu, (progress) => {
           if (progress.status === 'downloading' || progress.status === 'progress') {
             if (progress.total) {
               const pct = Math.round((progress.loaded / progress.total) * 100);
@@ -262,33 +267,9 @@ class WhisperTranscriptionPlugin extends Plugin {
           } else if (progress.status === 'ready') {
             log('Model ready status received', true);
           }
-        },
-      };
-      // GPU acceleration on mobile uses WebGPU when the browser provides it.
-      // Any failure (unsupported browser, driver issues, out of memory) falls
-      // back to the CPU (WASM) path automatically.
-      const useWebGpu =
-        this.settings.computeDevice === 'gpu' && typeof navigator !== 'undefined' && !!navigator.gpu;
-      if (useWebGpu) {
-        pipelineOptions.device = 'webgpu';
-        log('Requesting WebGPU for transcription');
-      }
-      let mobilePipeline;
-      try {
-        mobilePipeline = await this.trackDownload(() =>
-          pipeline('automatic-speech-recognition', this.settings.modelId, pipelineOptions)
-        );
-      } catch (pipelineError) {
-        if (!useWebGpu) {
-          throw pipelineError;
-        }
-        log('WebGPU pipeline failed; falling back to WASM', pipelineError);
-        delete pipelineOptions.device;
-        mobilePipeline = await this.trackDownload(() =>
-          pipeline('automatic-speech-recognition', this.settings.modelId, pipelineOptions)
-        );
-      }
-      this.transcriber = mobilePipeline;
+        })
+      );
+      this.transcriber = (audioData) => host.transcribe(audioData);
       this.isModelLoading = false;
       log('Model loaded successfully');
       this.showStatus('Model ready', true);
@@ -907,6 +888,10 @@ class WhisperTranscriptionPlugin extends Plugin {
     log('Plugin unloading');
     this.stopRecording();
     this.transcriber = null;
+    if (this.mobileWorkerHost) {
+      this.mobileWorkerHost.dispose();
+      this.mobileWorkerHost = null;
+    }
   }
 }
 

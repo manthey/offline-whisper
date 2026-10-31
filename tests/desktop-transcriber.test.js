@@ -36,7 +36,7 @@ afterAll(() => {
   Object.defineProperty(process, 'platform', { value: originalPlatform });
 });
 
-// --- https mocking helpers ------------------------------------------------
+// --- https mocking helpers
 
 // Queue of handlers; each handler receives (url, callback) and drives the
 // mocked response. Requests are recorded so tests can emit request errors.
@@ -90,7 +90,7 @@ function redirectResponse(location) {
   };
 }
 
-// --- child_process mocking helpers ----------------------------------------
+// --- child_process mocking helpers
 
 function fakeSpawn({ exitCode = 0, stderr = '', beforeClose = null, spawnError = null } = {}) {
   spawn.mockImplementation((command, args) => {
@@ -123,7 +123,7 @@ function releaseInfo(tagName, assetNames, { prerelease = false, body = '' } = {}
   };
 }
 
-// --- downloadFile -----------------------------------------------------------
+// --- downloadFile
 
 describe('downloadFile', () => {
   beforeEach(() => {
@@ -197,7 +197,7 @@ describe('downloadFile', () => {
   });
 });
 
-// --- extractZip -------------------------------------------------------------
+// --- extractZip
 
 describe('extractZip', () => {
   beforeEach(() => {
@@ -256,7 +256,7 @@ describe('extractZip', () => {
   });
 });
 
-// --- getLatestReleaseUrl (exercised through initialize) ---------------------
+// --- getLatestReleaseUrl (exercised through initialize)
 
 describe('release resolution through initialize', () => {
   beforeEach(() => {
@@ -422,7 +422,7 @@ describe('release resolution through initialize', () => {
   });
 });
 
-// --- model download and cache queries ---------------------------------------
+// --- model download and cache queries
 
 describe('model download and cache queries', () => {
   beforeEach(() => {
@@ -472,7 +472,7 @@ describe('model download and cache queries', () => {
   });
 });
 
-// --- transcription runs ------------------------------------------------------
+// --- transcription runs
 
 describe('transcription runs', () => {
   beforeEach(() => {
