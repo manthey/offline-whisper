@@ -92,8 +92,19 @@ function redirectResponse(location) {
 
 // --- child_process mocking helpers
 
-function fakeSpawn({ exitCode = 0, stderr = '', beforeClose = null, spawnError = null } = {}) {
+function fakeSpawn(options = {}) {
+  // A single options object applies to every spawn call; `calls` provides
+  // per-call options, and the last entry is reused for extra calls.
+  const calls = options.calls || [options];
+  let callIndex = 0;
   spawn.mockImplementation((command, args) => {
+    const {
+      exitCode = 0,
+      stderr = '',
+      beforeClose = null,
+      spawnError = null,
+    } = calls[Math.min(callIndex, calls.length - 1)] || {};
+    callIndex += 1;
     const proc = new EventEmitter();
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
@@ -163,6 +174,39 @@ describe('downloadFile', () => {
     fs.unlinkSync(destPath);
   });
 
+  test('rejects and retries when the download is truncated', async () => {
+    const transcriber = makeTranscriber({ setupOptions: { downloadRetryBaseMs: 0 } });
+    const destPath = path.join(tempVault, 'truncated-target.bin');
+    transcriber.modelPath = destPath;
+    queueHttps(fileResponse(200, ['short'], 99), fileResponse(200, ['short'], 99), fileResponse(200, ['ok'], 2));
+    await transcriber.downloadModel('ggml-tiny.en.bin', () => {});
+    expect(fs.readFileSync(destPath, 'utf8')).toBe('ok');
+    fs.unlinkSync(destPath);
+  });
+
+  test('rejects and retries when the response errors mid-download', async () => {
+    const transcriber = makeTranscriber({ setupOptions: { downloadRetryBaseMs: 0 } });
+    const destPath = path.join(tempVault, 'aborted-target.bin');
+    transcriber.modelPath = destPath;
+    queueHttps(
+      (url, callback) => {
+        const response = new EventEmitter();
+        response.statusCode = 200;
+        response.headers = { 'content-length': '99' };
+        response.pipe = (dest) => {
+          dest.write(Buffer.from('partial'));
+          response.emit('data', Buffer.from('partial'));
+          response.emit('error', Object.assign(new Error('aborted'), { code: 'ECONNRESET' }));
+        };
+        callback(response);
+      },
+      fileResponse(200, ['ok'], 2),
+    );
+    await transcriber.downloadModel('ggml-tiny.en.bin', () => {});
+    expect(fs.readFileSync(destPath, 'utf8')).toBe('ok');
+    fs.unlinkSync(destPath);
+  });
+
   test('throws when the server returns an unrecoverable status', async () => {
     jest.useFakeTimers();
     const transcriber = makeTranscriber();
@@ -207,8 +251,10 @@ describe('extractZip', () => {
 
   test('reports a failing exit code through initialize', async () => {
     Object.defineProperty(process, 'platform', { value: 'linux' });
-    const transcriber = makeTranscriber();
+    const transcriber = makeTranscriber({ setupOptions: { checkAttempts: 1, checkDelayMs: 0, retryDelayMs: 0 } });
     queueHttps(
+      jsonResponse(200, releaseInfo('v1.0', ['whisper-bin-blas-linux-x64.tar.gz'])),
+      fileResponse(200, ['archive-bytes'], 13),
       jsonResponse(200, releaseInfo('v1.0', ['whisper-bin-blas-linux-x64.tar.gz'])),
       fileResponse(200, ['archive-bytes'], 13),
     );
@@ -229,9 +275,9 @@ describe('extractZip', () => {
     await expect(transcriber.initialize('onnx-community/whisper-base.en', () => {})).rejects.toThrow('tar not found');
   });
 
-  test('uses PowerShell to expand archives on Windows', async () => {
+  test('uses tar to extract archives on Windows', async () => {
     Object.defineProperty(process, 'platform', { value: 'win32' });
-    const transcriber = makeTranscriber();
+    const transcriber = makeTranscriber({ setupOptions: { checkAttempts: 1, checkDelayMs: 0 } });
     fs.mkdirSync(path.join(pluginDir, 'models'), { recursive: true });
     fs.writeFileSync(path.join(pluginDir, 'models', 'ggml-base.en.bin'), 'model');
     queueHttps(
@@ -241,18 +287,100 @@ describe('extractZip', () => {
     fakeSpawn({
       exitCode: 0,
       beforeClose: (command, args) => {
-        expect(command).toBe('powershell');
-        // extractZip embeds the paths in a single -Command string.
-        const match = args[args.length - 1].match(/-DestinationPath "([^"]+)"/);
-        expect(match).toBeTruthy();
+        expect(command).toBe('tar');
+        expect(args[0]).toBe('-xf');
         // Simulate extraction side effect so ensureExecutable finds the binary.
-        fs.mkdirSync(match[1], { recursive: true });
-        fs.writeFileSync(path.join(match[1], 'whisper-cli.exe'), 'x');
+        // tar is spawned with ['-xf', zipPath, '-C', destDir].
+        fs.mkdirSync(args[3], { recursive: true });
+        fs.writeFileSync(path.join(args[3], 'whisper-cli.exe'), 'x');
       },
     });
     await transcriber.initialize('onnx-community/whisper-base.en', () => {});
     expect(transcriber.whisperPath).toContain('whisper-cli.exe');
     expect(transcriber.initialized).toBe(true);
+  });
+
+  test('falls back to PowerShell when tar is missing on Windows', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const transcriber = makeTranscriber({ setupOptions: { checkAttempts: 1, checkDelayMs: 0 } });
+    fs.mkdirSync(path.join(pluginDir, 'models'), { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, 'models', 'ggml-base.en.bin'), 'model');
+    queueHttps(
+      jsonResponse(200, releaseInfo('v1.0', ['whisper-blas-bin-x64.zip'])),
+      fileResponse(200, ['archive-bytes'], 13),
+    );
+    fakeSpawn({
+      calls: [
+        { spawnError: Object.assign(new Error('spawn tar ENOENT'), { code: 'ENOENT' }) },
+        {
+          exitCode: 0,
+          beforeClose: (command, args) => {
+            expect(command).toBe('powershell');
+            // extractZip embeds the paths in a single -Command string using
+            // single-quoted PowerShell literals.
+            const commandLine = args[args.length - 1];
+            const archive = commandLine.match(/-LiteralPath '([^']+)'/);
+            const destination = commandLine.match(/-DestinationPath '([^']+)'/);
+            expect(archive).toBeTruthy();
+            expect(destination).toBeTruthy();
+            // Simulate extraction side effect so ensureExecutable finds the binary.
+            fs.mkdirSync(destination[1], { recursive: true });
+            fs.writeFileSync(path.join(destination[1], 'whisper-cli.exe'), 'x');
+          },
+        },
+      ],
+    });
+    await transcriber.initialize('onnx-community/whisper-base.en', () => {});
+    expect(transcriber.whisperPath).toContain('whisper-cli.exe');
+    expect(transcriber.initialized).toBe(true);
+  });
+
+  test('retries extraction when it initially produces no executable', async () => {
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    const transcriber = makeTranscriber({ setupOptions: { checkAttempts: 1, checkDelayMs: 0, retryDelayMs: 0 } });
+    fs.mkdirSync(path.join(pluginDir, 'models'), { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, 'models', 'ggml-base.en.bin'), 'model');
+    queueHttps(
+      jsonResponse(200, releaseInfo('v1.0', ['whisper-bin-blas-linux-x64.tar.gz'])),
+      fileResponse(200, ['archive-bytes'], 13),
+    );
+    fakeSpawn({
+      calls: [
+        { exitCode: 0 }, // the first extraction produces nothing
+        {
+          exitCode: 0,
+          beforeClose: (command, args) => {
+            // The retry re-extracts the same archive without another download.
+            expect(command).toBe('tar');
+            fs.writeFileSync(path.join(args[3], 'whisper-cli'), 'x');
+          },
+        },
+      ],
+    });
+    await transcriber.initialize('onnx-community/whisper-base.en', () => {});
+    expect(transcriber.whisperPath).toContain('whisper-cli');
+    // One release lookup and one archive download; the retry reused the file.
+    expect(https.get.mock.calls.length).toBe(2);
+    expect(fs.existsSync(path.join(pluginDir, 'bin', 'whisper.tar.gz'))).toBe(false);
+  });
+
+  test('re-extracts a previously downloaded archive without downloading again', async () => {
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    const transcriber = makeTranscriber({ setupOptions: { checkAttempts: 1, checkDelayMs: 0 } });
+    fs.mkdirSync(path.join(pluginDir, 'models'), { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, 'models', 'ggml-base.en.bin'), 'model');
+    const binDir = path.join(pluginDir, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(path.join(binDir, 'whisper.tar.gz'), 'archive');
+    fakeSpawn({
+      exitCode: 0,
+      beforeClose: (command, args) => {
+        fs.writeFileSync(path.join(args[3], 'whisper-cli'), 'x');
+      },
+    });
+    await transcriber.initialize('onnx-community/whisper-base.en', () => {});
+    expect(transcriber.whisperPath).toContain('whisper-cli');
+    expect(https.get).not.toHaveBeenCalled();
   });
 });
 
@@ -408,8 +536,10 @@ describe('release resolution through initialize', () => {
 
   test('fails when the extracted archive contains no executable', async () => {
     Object.defineProperty(process, 'platform', { value: 'linux' });
-    const transcriber = makeTranscriber();
+    const transcriber = makeTranscriber({ setupOptions: { checkAttempts: 1, checkDelayMs: 0, retryDelayMs: 0 } });
     queueHttps(
+      jsonResponse(200, releaseInfo('v1.9.0', ['whisper-bin-blas-linux-x64.tar.gz'])),
+      fileResponse(200, ['archive-bytes'], 13),
       jsonResponse(200, releaseInfo('v1.9.0', ['whisper-bin-blas-linux-x64.tar.gz'])),
       fileResponse(200, ['archive-bytes'], 13),
     );
@@ -417,7 +547,7 @@ describe('release resolution through initialize', () => {
     fs.mkdirSync(path.join(pluginDir, 'models'), { recursive: true });
     fs.writeFileSync(path.join(pluginDir, 'models', 'ggml-base.en.bin'), 'model');
     await expect(transcriber.initialize('onnx-community/whisper-base.en', () => {})).rejects.toThrow(
-      /Could not find whisper executable after extraction/,
+      /Could not set up the whisper executable/,
     );
   });
 });

@@ -11,6 +11,16 @@ const MODEL_MAP = {
   'onnx-community/whisper-medium': 'ggml-medium.bin',
 };
 
+// Retry timing for downloading and extracting the whisper executable.
+// Tests shorten these delays.
+const DEFAULT_SETUP_OPTIONS = {
+  attempts: 3,
+  checkAttempts: 3,
+  checkDelayMs: 2000,
+  retryDelayMs: 2000,
+  downloadRetryBaseMs: 30000,
+};
+
 const nodeRequire = new Function('moduleName', 'return require(moduleName)');
 function getNodeModules() {
   return {
@@ -56,7 +66,7 @@ function getPlatformInfo(useGpu) {
   return { platform, arch, execNames, archivePattern, repo };
 }
 
-async function downloadFile(url, destPath, progressCallback, maxAttempts = 5) {
+async function downloadFile(url, destPath, progressCallback, maxAttempts = 5, retryBaseDelayMs = 30000) {
   const { https, fs } = getNodeModules();
   let attempt = 0;
   while (true) {
@@ -82,20 +92,32 @@ async function downloadFile(url, destPath, progressCallback, maxAttempts = 5) {
               const totalSize = parseInt(response.headers['content-length'], 10);
               let downloadedSize = 0;
               const file = fs.createWriteStream(destPath);
+              const fail = (err) => {
+                // Destroy the stream so the file handle is released before
+                // the partial file is removed.
+                file.destroy();
+                fs.unlink(destPath, () => {});
+                reject(err);
+              };
               response.on('data', (chunk) => {
                 downloadedSize += chunk.length;
                 if (progressCallback && totalSize) {
                   progressCallback(downloadedSize, totalSize);
                 }
               });
+              // A connection that drops mid-body emits an error on the
+              // response; without this handler the promise never settles.
+              response.on('error', fail);
               response.pipe(file);
+              file.on('error', fail);
               file.on('finish', () => {
-                file.close();
-                resolve();
-              });
-              file.on('error', (err) => {
-                fs.unlink(destPath, () => {});
-                reject(err);
+                file.close(() => {
+                  if (totalSize && downloadedSize !== totalSize) {
+                    fail(new Error(`Download truncated: received ${downloadedSize} of ${totalSize} bytes`));
+                    return;
+                  }
+                  resolve();
+                });
               });
             })
             .on('error', reject);
@@ -108,47 +130,87 @@ async function downloadFile(url, destPath, progressCallback, maxAttempts = 5) {
         throw err;
       }
       const match = err.message.match(/^RATE_LIMIT:(\d+)$/);
-      const waitSeconds = match ? Math.min(parseInt(match[1], 10), 120) : Math.min(30 * Math.pow(2, attempt - 1), 120);
+      const waitSeconds = match
+        ? Math.min(parseInt(match[1], 10), 120)
+        : Math.min(Math.ceil(retryBaseDelayMs / 1000) * Math.pow(2, attempt - 1), 120);
       log(`Download failed (attempt ${attempt}/${maxAttempts}): ${err.message}. Retrying in ${waitSeconds}s...`);
       await new Promise((r) => setTimeout(r, waitSeconds * 1000));
     }
   }
 }
 
+function escapePowerShellString(value) {
+  return value.replace(/'/g, "''");
+}
+
 async function extractZip(zipPath, destDir, platform) {
   const { spawn } = getNodeModules();
-  return new Promise((resolve, reject) => {
-    let proc;
-    let stdout = '';
-    if (platform === 'win32') {
-      proc = spawn('powershell', [
-        '-NoProfile',
-        '-Command',
-        `Expand-Archive -Path "${zipPath}" -DestinationPath "${destDir}" -Force`,
-      ]);
-    } else if (zipPath.endsWith('.zip')) {
-      proc = spawn('unzip', ['-o', zipPath, '-d', destDir]);
-    } else {
-      proc = spawn('tar', ['-xzf', zipPath, '-C', destDir]);
-    }
-    proc.stdout.on('data', (data) => {
-      stdout += data.toString();
+  const runExtractor = (command, args) =>
+    new Promise((resolve, reject) => {
+      const proc = spawn(command, args);
+      let stdout = '';
+      let stderr = '';
+      proc.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+      proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+      proc.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          const detail = stderr.trim() || stdout.trim();
+          reject(new Error(`${command} exited with code ${code}${detail ? ': ' + detail : ''}`));
+        }
+      });
+      proc.on('error', (error) => {
+        // Mark spawn failures (the extractor is missing or unusable) so the
+        // caller does not retry them.
+        reject(Object.assign(error, { spawnFailure: true }));
+      });
     });
-    let stderr = '';
-    proc.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-    proc.on('close', (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`Extraction failed with code ${code}: ${stderr}`));
+  if (platform === 'win32') {
+    try {
+      // Windows 10 and later ship bsdtar, which extracts zip archives and
+      // reliably reports failures with a non-zero exit code.
+      return await runExtractor('tar', ['-xf', zipPath, '-C', destDir]);
+    } catch (error) {
+      if (!error.spawnFailure || error.code !== 'ENOENT') {
+        throw error;
       }
-    });
-    proc.on('error', (error) => {
-      reject(error);
-    });
-  });
+      // tar is not installed; fall back to Expand-Archive. -ErrorAction Stop
+      // and the explicit exit codes make failures visible, because a plain
+      // Expand-Archive invocation exits 0 even when it extracts nothing.
+      const command =
+        `try { Expand-Archive -LiteralPath '${escapePowerShellString(zipPath)}'` +
+        ` -DestinationPath '${escapePowerShellString(destDir)}' -Force -ErrorAction Stop; exit 0 } catch { exit 1 }`;
+      return runExtractor('powershell', ['-NoProfile', '-Command', command]);
+    }
+  }
+  if (zipPath.endsWith('.zip')) {
+    return runExtractor('unzip', ['-o', zipPath, '-d', destDir]);
+  }
+  return runExtractor('tar', ['-xzf', zipPath, '-C', destDir]);
+}
+
+// The file name under which a downloaded whisper release archive is kept in
+// the bin directory until its contents have been verified.
+function archivePathFor(platformInfo, binDir) {
+  const { path } = getNodeModules();
+  return path.join(binDir, platformInfo.platform !== 'linux' ? 'whisper.zip' : 'whisper.tar.gz');
+}
+
+// Newly extracted files can be briefly invisible or locked while a real-time
+// antivirus scanner processes them, so re-check for a short period before
+// concluding that the extraction produced nothing.
+async function waitForExecutable(dir, execNames, checkAttempts, checkDelayMs) {
+  let execPath = findExecutable(dir, execNames);
+  for (let check = 1; !execPath && check < checkAttempts; check += 1) {
+    await new Promise((resolve) => setTimeout(resolve, checkDelayMs));
+    execPath = findExecutable(dir, execNames);
+  }
+  return execPath;
 }
 
 function findExecutable(dir, execNames) {
@@ -323,6 +385,7 @@ class DesktopTranscriber {
     this.useGpu = !!(options && options.useGpu) && getPlatformInfo().platform === 'win32';
     this.gpuActive = false;
     this.gpuProbed = false;
+    this.setupOptions = { ...DEFAULT_SETUP_OPTIONS, ...((options && options.setupOptions) || {}) };
   }
 
   getNodeModules() {
@@ -399,48 +462,96 @@ class DesktopTranscriber {
 
   async ensureExecutable(platformInfo, binDir, progressCallback) {
     let execPath = findExecutable(binDir, platformInfo.execNames);
-    if (!execPath) {
-      log('Downloading whisper executable');
-      const report = progressCallback || (() => {});
-      report({ status: 'downloading', message: 'Downloading whisper executable' });
-      await this.downloadExecutable(binDir, platformInfo, report);
-      execPath = findExecutable(binDir, platformInfo.execNames);
-      if (!execPath) {
-        const contents = listDirRecursive(binDir);
-        throw new Error('Could not find whisper executable after extraction. Contents: ' + contents.join(', '));
-      }
+    if (execPath) {
+      return execPath;
     }
-    return execPath;
+    const { fs } = this.getNodeModules();
+    const report = progressCallback || (() => {});
+    const zipPath = archivePathFor(platformInfo, binDir);
+    const { attempts, checkAttempts, checkDelayMs, retryDelayMs } = this.setupOptions;
+    // Downloads and extractions fail transiently: connections drop, archives
+    // are truncated, and antivirus scanners can lock or hide freshly
+    // extracted files. Retries reuse the downloaded archive once; the final
+    // attempt always re-downloads in case the stored archive itself is bad.
+    for (let attempt = 1; ; attempt += 1) {
+      if (attempt > 1) {
+        log(`Retrying whisper executable setup (attempt ${attempt}/${attempts})`);
+      }
+      if (attempt === attempts && fs.existsSync(zipPath)) {
+        log('Removing possibly corrupt archive before the final attempt');
+        fs.unlinkSync(zipPath);
+      }
+      if (!fs.existsSync(zipPath)) {
+        report({ status: 'downloading', message: 'Downloading whisper executable' });
+        await this.downloadExecutable(binDir, platformInfo, report);
+      }
+      log('Extracting archive');
+      report({ status: 'extracting', message: 'Extracting' });
+      let lastError = null;
+      try {
+        await extractZip(zipPath, binDir, platformInfo.platform);
+      } catch (error) {
+        if (error.spawnFailure) {
+          // The extractor itself is missing or unusable; retrying cannot help.
+          throw error;
+        }
+        lastError = error;
+      }
+      if (!lastError) {
+        execPath = await waitForExecutable(binDir, platformInfo.execNames, checkAttempts, checkDelayMs);
+        if (execPath) {
+          try {
+            fs.unlinkSync(zipPath);
+          } catch (e) {
+            log('Failed to delete zip file', e);
+          }
+          return execPath;
+        }
+      }
+      const contents = listDirRecursive(binDir).join(', ') || '(empty)';
+      log(`No whisper executable in ${binDir} after attempt ${attempt}/${attempts}. Contents: ${contents}`);
+      if (attempt >= attempts) {
+        const details = [`Could not set up the whisper executable after ${attempt} attempts`, `Contents: ${contents}`];
+        if (lastError) {
+          details.push(`Last error: ${lastError.message}`);
+        }
+        throw new Error(details.join('. '));
+      }
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
   }
 
   async downloadExecutable(binDir, platformInfo, progressCallback) {
-    const { path, fs } = this.getNodeModules();
     const url = await getLatestReleaseUrl(platformInfo.archivePattern, platformInfo.repo);
-    const zipPath = path.join(binDir, platformInfo.platform !== 'linux' ? 'whisper.zip' : 'whisper.tar.gz');
+    const zipPath = archivePathFor(platformInfo, binDir);
     log('Downloading from: ' + url);
-    await downloadFile(url, zipPath, (loaded, total) => {
-      const pct = Math.round((loaded / total) * 100);
-      const mb = (loaded / 1024 / 1024).toFixed(1);
-      progressCallback({ status: 'progress', loaded, total, message: `Downloading executable: ${pct}% (${mb}MB)` });
-    });
-    log('Extracting archive');
-    progressCallback({ status: 'extracting', message: 'Extracting' });
-    await extractZip(zipPath, binDir, platformInfo.platform);
-    try {
-      fs.unlinkSync(zipPath);
-    } catch (e) {
-      log('Failed to delete zip file', e);
-    }
+    await downloadFile(
+      url,
+      zipPath,
+      (loaded, total) => {
+        const pct = Math.round((loaded / total) * 100);
+        const mb = (loaded / 1024 / 1024).toFixed(1);
+        progressCallback({ status: 'progress', loaded, total, message: `Downloading executable: ${pct}% (${mb}MB)` });
+      },
+      5,
+      this.setupOptions.downloadRetryBaseMs,
+    );
   }
 
   async downloadModel(modelFileName, progressCallback) {
     const url = `${MODEL_BASE_URL}/${modelFileName}`;
     log('Downloading model from: ' + url);
-    await downloadFile(url, this.modelPath, (loaded, total) => {
-      const pct = Math.round((loaded / total) * 100);
-      const mb = (loaded / 1024 / 1024).toFixed(1);
-      progressCallback({ status: 'progress', loaded, total, message: `Downloading model: ${pct}% (${mb}MB)` });
-    });
+    await downloadFile(
+      url,
+      this.modelPath,
+      (loaded, total) => {
+        const pct = Math.round((loaded / total) * 100);
+        const mb = (loaded / 1024 / 1024).toFixed(1);
+        progressCallback({ status: 'progress', loaded, total, message: `Downloading model: ${pct}% (${mb}MB)` });
+      },
+      5,
+      this.setupOptions.downloadRetryBaseMs,
+    );
     log('Model downloaded: ' + this.modelPath);
   }
 
@@ -577,4 +688,4 @@ class DesktopTranscriber {
   }
 }
 
-module.exports = { DesktopTranscriber, getPlatformInfo, parseBackends };
+module.exports = { DesktopTranscriber, getPlatformInfo, parseBackends, downloadFile, extractZip };
