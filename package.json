@@ -19,5 +19,9 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0"
+  },
+  "overrides": {
+    "glob": "^14.0.6",
+    "minimatch": "^11.0.9"
   }
 }
